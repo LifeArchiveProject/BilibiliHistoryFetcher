@@ -19,7 +19,9 @@ from routers import (
     send_log,
     download,
     history,
-    categories
+    categories,
+    viewing_analytics,
+    title_analytics
 )
 from scripts.scheduler_manager import SchedulerManager
 from scripts.utils import load_config
@@ -229,6 +231,8 @@ app.include_router(send_log.router, prefix="/log", tags=["Log"])
 app.include_router(download.router, prefix="/download", tags=["Download"])
 app.include_router(history.router, prefix="/BiliHistory2024", tags=["History"])
 app.include_router(categories.router, prefix="/BiliHistory2024", tags=["Categories"])
+app.include_router(viewing_analytics.router, prefix="/viewing-analytics", tags=["ViewingAnalytics"])
+app.include_router(title_analytics.router, prefix="/title-analytics", tags=["TitleAnalytics"])
 
 # 入口点，启动应用
 if __name__ == "__main__":
