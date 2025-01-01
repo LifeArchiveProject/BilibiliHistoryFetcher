@@ -22,7 +22,8 @@ async def get_history_page(
     sort_order: int = Query(0, description="排序顺序，0为降序，1为升序"),
     tag_name: Optional[str] = Query(None, description="视频子分区名称"),
     main_category: Optional[str] = Query(None, description="主分区名称"),
-    date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd")
+    date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd"),
+    year: Optional[int] = Query(None, description="要查询的年份，不传则使用当前年份")
 ):
     """分页查询历史记录"""
     # 打印接收到的参数
@@ -33,6 +34,7 @@ async def get_history_page(
     print(f"子分区名称(tag_name): {tag_name if tag_name else '无'}")
     print(f"主分区名称(main_category): {main_category if main_category else '无'}")
     print(f"日期范围(date_range): {date_range if date_range else '无'}")
+    print(f"查询年份(year): {year if year else '当前年份'}")
     print("=====================\n")
 
     try:
@@ -40,8 +42,21 @@ async def get_history_page(
         cursor = conn.cursor()
         
         # 构建基础查询
-        current_year = datetime.now().year
-        table_name = f"bilibili_history_{current_year}"
+        target_year = year if year is not None else datetime.now().year
+        table_name = f"bilibili_history_{target_year}"
+        
+        # 检查表是否存在
+        cursor.execute("""
+            SELECT count(name) FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (table_name,))
+        
+        if cursor.fetchone()[0] == 0:
+            return {
+                "status": "error",
+                "message": f"未找到 {target_year} 年的历史记录数据"
+            }
+            
         query = f"SELECT * FROM {table_name} WHERE 1=1"
         params = []
 
@@ -133,15 +148,29 @@ async def search_history(
     page: int = Query(1, description="当前页码"),
     size: int = Query(10, description="每页记录数"),
     sortOrder: int = Query(0, description="排序顺序，0为降序，1为升序"),
-    search: Optional[str] = Query(None, description="搜索关键词")
+    search: Optional[str] = Query(None, description="搜索关键词"),
+    year: Optional[int] = Query(None, description="要查询的年份，不传则使用当前年份")
 ):
     """搜索历史记录"""
     try:
         conn = get_db()
         cursor = conn.cursor()
         
-        current_year = datetime.now().year
-        table_name = f"bilibili_history_{current_year}"
+        target_year = year if year is not None else datetime.now().year
+        table_name = f"bilibili_history_{target_year}"
+        
+        # 检查表是否存在
+        cursor.execute("""
+            SELECT count(name) FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (table_name,))
+        
+        if cursor.fetchone()[0] == 0:
+            return {
+                "status": "error",
+                "message": f"未找到 {target_year} 年的历史记录数据"
+            }
+            
         query = f"SELECT * FROM {table_name} WHERE 1=1"
         params = []
 

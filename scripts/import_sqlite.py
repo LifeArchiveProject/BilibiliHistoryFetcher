@@ -187,9 +187,19 @@ def import_data_from_json(conn, table_name, file_path, batch_size=1000):
             return 0
             
         total_inserted = 0
-        new_data = []
+        # 按年份分组数据
+        data_by_year = {}
 
         for item in data:
+            # 根据view_at确定年份
+            view_at = item.get('view_at', 0)
+            if view_at == 0:
+                continue
+                
+            year = datetime.fromtimestamp(view_at).year
+            if year not in data_by_year:
+                data_by_year[year] = []
+                
             main_category = None
             history = item.get('history', {})
             business = history.get('business', '')
@@ -203,7 +213,7 @@ def import_data_from_json(conn, table_name, file_path, batch_size=1000):
                 else:
                     main_category = '待定'
 
-            new_data.append((
+            record = (
                 id_generator.get_id(),
                 item.get('title', ''),
                 item.get('long_title', ''),
@@ -222,7 +232,7 @@ def import_data_from_json(conn, table_name, file_path, batch_size=1000):
                 item.get('author_name', ''),
                 item.get('author_face', ''),
                 item.get('author_mid', 0),
-                item.get('view_at', 0),
+                view_at,
                 item.get('progress', 0),
                 item.get('badge', ''),
                 item.get('show_title', ''),
@@ -236,13 +246,24 @@ def import_data_from_json(conn, table_name, file_path, batch_size=1000):
                 tag_name,
                 item.get('live_status', 0),
                 main_category
-            ))
+            )
+            data_by_year[year].append(record)
 
-        total_inserted = 0
-        for i in range(0, len(new_data), batch_size):
-            batch_chunk = new_data[i:i + batch_size]
-            inserted_count = batch_insert_data(conn, table_name, batch_chunk)
-            total_inserted += inserted_count
+        # 为每个年份创建表并插入数据
+        for year, year_data in data_by_year.items():
+            year_table_name = f"bilibili_history_{year}"
+            
+            # 确保表存在
+            if not table_exists(conn, year_table_name):
+                create_table(conn, year_table_name)
+                print(f"创建表: {year_table_name}")
+            
+            # 分批插入数据
+            for i in range(0, len(year_data), batch_size):
+                batch_chunk = year_data[i:i + batch_size]
+                inserted_count = batch_insert_data(conn, year_table_name, batch_chunk)
+                total_inserted += inserted_count
+                print(f"向表 {year_table_name} 插入了 {inserted_count} 条记录")
 
         return total_inserted
         
@@ -303,9 +324,6 @@ def import_all_history_files():
 
     print(f"开始遍历并导入文件夹 '{full_data_folder}' 中的数据...")
 
-    current_year, previous_year = get_years()
-    table_name = f"bilibili_history_{current_year}"
-
     conn = create_connection(full_db_file)
     if conn is None:
         message = f"无法连接到数据库 {full_db_file}。"
@@ -313,13 +331,6 @@ def import_all_history_files():
         return {"status": "error", "message": message}
 
     try:
-        # 如果表不存在才创建
-        if not table_exists(conn, table_name):
-            create_table(conn, table_name)
-            print(f"创建表: {table_name}")
-        else:
-            print(f"表 {table_name} 已存在")
-
         # 遍历文件并导入
         total_files = 0
         total_records = 0
@@ -338,7 +349,7 @@ def import_all_history_files():
                                     continue
                                     
                                 print(f"\n导入文件: {day_path}")
-                                inserted_count = import_data_from_json(conn, table_name, day_path)
+                                inserted_count = import_data_from_json(conn, None, day_path)
                                 if inserted_count > 0:
                                     total_files += 1
                                     total_records += inserted_count

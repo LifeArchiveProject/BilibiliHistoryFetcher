@@ -149,30 +149,72 @@ def analyze_history_by_params(date_str=None, start_date=None, end_date=None):
     finally:
         conn.close()
 
-def get_daily_counts():
+def get_daily_counts(year=None):
     """获取每日观看数量"""
     conn = get_db()
     try:
         cursor = conn.cursor()
-        current_year = get_current_year()
-        table_name = f"bilibili_history_{current_year}"
+        table_name = f"bilibili_history_{year}" if year else None
         
-        # 按日期统计观看数量
-        cursor.execute(f"""
-            SELECT 
-                strftime('%Y-%m-%d', datetime(view_at, 'unixepoch')) as date,
-                COUNT(*) as count
-            FROM {table_name}
-            GROUP BY date
-            ORDER BY date
-        """)
-        
-        daily_count = {row[0]: row[1] for row in cursor.fetchall()}
+        if not table_name:
+            # 获取所有年份的表
+            cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name LIKE 'bilibili_history_%'
+            """)
+            tables = cursor.fetchall()
+            if not tables:
+                return {"error": "未找到任何历史记录数据"}
+            
+            # 合并所有年份的数据
+            daily_count = {}
+            for (table,) in tables:
+                # 按日期统计观看数量
+                cursor.execute(f"""
+                    SELECT 
+                        strftime('%Y-%m-%d', datetime(view_at, 'unixepoch')) as date,
+                        COUNT(*) as count
+                    FROM {table}
+                    GROUP BY date
+                    ORDER BY date
+                """)
+                
+                for row in cursor.fetchall():
+                    date, count = row
+                    if date in daily_count:
+                        daily_count[date] += count
+                    else:
+                        daily_count[date] = count
+        else:
+            # 查询指定年份的数据
+            cursor.execute(f"""
+                SELECT 
+                    strftime('%Y-%m-%d', datetime(view_at, 'unixepoch')) as date,
+                    COUNT(*) as count
+                FROM {table_name}
+                GROUP BY date
+                ORDER BY date
+            """)
+            
+            daily_count = {row[0]: row[1] for row in cursor.fetchall()}
         
         # 保存到JSON文件
         try:
-            output_file = save_daily_count_to_json(daily_count, current_year)
-            print(f"数据已保存到: {output_file}")
+            if year:
+                output_file = save_daily_count_to_json(daily_count, year)
+            else:
+                # 按年份拆分数据并保存
+                daily_count_by_year = {}
+                for date, count in daily_count.items():
+                    year = date.split('-')[0]
+                    if year not in daily_count_by_year:
+                        daily_count_by_year[year] = {}
+                    daily_count_by_year[year][date] = count
+                
+                # 保存每年的数据到单独的文件
+                for year, data in daily_count_by_year.items():
+                    output_file = save_daily_count_to_json(data, year)
+                    print(f"数据已保存到: {output_file}")
         except Exception as e:
             print(f"保存JSON文件时出错: {e}")
             return {"error": f"保存JSON文件时出错: {e}"}
@@ -185,25 +227,53 @@ def get_daily_counts():
     finally:
         conn.close()
 
-def get_monthly_counts():
+def get_monthly_counts(year=None):
     """获取每月观看数量"""
     conn = get_db()
     try:
         cursor = conn.cursor()
-        current_year = get_current_year()
-        table_name = f"bilibili_history_{current_year}"
+        table_name = f"bilibili_history_{year}" if year else None
         
-        # 按月份统计观看数量
-        cursor.execute(f"""
-            SELECT 
-                strftime('%Y-%m', datetime(view_at, 'unixepoch')) as month,
-                COUNT(*) as count
-            FROM {table_name}
-            GROUP BY month
-            ORDER BY month
-        """)
-        
-        monthly_count = {row[0]: row[1] for row in cursor.fetchall()}
+        if not table_name:
+            # 获取所有年份的表
+            cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name LIKE 'bilibili_history_%'
+            """)
+            tables = cursor.fetchall()
+            if not tables:
+                return {"error": "未找到任何历史记录数据"}
+            
+            # 合并所有年份的数据
+            monthly_count = {}
+            for (table,) in tables:
+                cursor.execute(f"""
+                    SELECT 
+                        strftime('%Y-%m', datetime(view_at, 'unixepoch')) as month,
+                        COUNT(*) as count
+                    FROM {table}
+                    GROUP BY month
+                    ORDER BY month
+                """)
+                
+                for row in cursor.fetchall():
+                    month, count = row
+                    if month in monthly_count:
+                        monthly_count[month] += count
+                    else:
+                        monthly_count[month] = count
+        else:
+            cursor.execute(f"""
+                SELECT 
+                    strftime('%Y-%m', datetime(view_at, 'unixepoch')) as month,
+                    COUNT(*) as count
+                FROM {table_name}
+                GROUP BY month
+                ORDER BY month
+            """)
+            
+            monthly_count = {row[0]: row[1] for row in cursor.fetchall()}
+            
         return monthly_count
         
     except sqlite3.Error as e:
@@ -217,12 +287,13 @@ def get_daily_and_monthly_counts():
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"========== 运行时间: {current_time} ==========")
     
+    # 获取所有年份的数据
     daily_count = get_daily_counts()
-    if "error" in daily_count:
+    if isinstance(daily_count, dict) and "error" in daily_count:
         return {"error": daily_count["error"]}
         
     monthly_count = get_monthly_counts()
-    if "error" in monthly_count:
+    if isinstance(monthly_count, dict) and "error" in monthly_count:
         return {"error": monthly_count["error"]}
     
     # 输出每月的视频观看统计
