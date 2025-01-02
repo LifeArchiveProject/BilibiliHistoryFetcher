@@ -15,6 +15,48 @@ def get_db():
     db_path = get_output_path(config['db_file'])
     return sqlite3.connect(db_path)
 
+def get_available_years():
+    """获取数据库中所有可用的年份"""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name LIKE 'bilibili_history_%'
+            ORDER BY name DESC
+        """)
+        
+        years = []
+        for (table_name,) in cursor.fetchall():
+            try:
+                year = int(table_name.split('_')[-1])
+                years.append(year)
+            except (ValueError, IndexError):
+                continue
+                
+        return sorted(years, reverse=True)
+    except sqlite3.Error as e:
+        print(f"获取年份列表时发生错误: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/available-years")
+async def get_years():
+    """获取所有可用的年份列表"""
+    years = get_available_years()
+    if not years:
+        return {
+            "status": "error",
+            "message": "未找到任何历史记录数据"
+        }
+    
+    return {
+        "status": "success",
+        "data": years
+    }
+
 @router.get("/all")
 async def get_history_page(
     page: int = Query(1, description="当前页码"),
@@ -22,8 +64,7 @@ async def get_history_page(
     sort_order: int = Query(0, description="排序顺序，0为降序，1为升序"),
     tag_name: Optional[str] = Query(None, description="视频子分区名称"),
     main_category: Optional[str] = Query(None, description="主分区名称"),
-    date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd"),
-    year: Optional[int] = Query(None, description="要查询的年份，不传则使用当前年份")
+    date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd")
 ):
     """分页查询历史记录"""
     # 打印接收到的参数
@@ -34,35 +75,43 @@ async def get_history_page(
     print(f"子分区名称(tag_name): {tag_name if tag_name else '无'}")
     print(f"主分区名称(main_category): {main_category if main_category else '无'}")
     print(f"日期范围(date_range): {date_range if date_range else '无'}")
-    print(f"查询年份(year): {year if year else '当前年份'}")
     print("=====================\n")
 
     try:
         conn = get_db()
         cursor = conn.cursor()
         
-        # 构建基础查询
-        target_year = year if year is not None else datetime.now().year
-        table_name = f"bilibili_history_{target_year}"
-        
-        # 检查表是否存在
-        cursor.execute("""
-            SELECT count(name) FROM sqlite_master 
-            WHERE type='table' AND name=?
-        """, (table_name,))
-        
-        if cursor.fetchone()[0] == 0:
+        # 获取可用年份列表
+        available_years = get_available_years()
+        if not available_years:
             return {
                 "status": "error",
-                "message": f"未找到 {target_year} 年的历史记录数据"
+                "message": "未找到任何历史记录数据"
             }
+        
+        # 根据date_range参数决定使用哪个年份的表
+        target_year = available_years[0]  # 默认使用最新年份
+        if date_range:
+            try:
+                start_date = date_range.split('-')[0]
+                target_year = int(start_date[:4])  # 从日期范围中提取年份
+                
+                if target_year not in available_years:
+                    return {
+                        "status": "error",
+                        "message": f"未找到 {target_year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
+                    }
+            except (ValueError, IndexError):
+                return {"status": "error", "message": "日期格式无效，应为yyyyMMdd-yyyyMMdd"}
             
+        table_name = f"bilibili_history_{target_year}"
         query = f"SELECT * FROM {table_name} WHERE 1=1"
         params = []
 
         # 打印SQL查询开始
         print("=== SQL查询构建 ===")
         print(f"基础查询: {query}")
+        print(f"使用数据表: {table_name}")
 
         # 处理日期范围
         if date_range:
@@ -156,21 +205,25 @@ async def search_history(
         conn = get_db()
         cursor = conn.cursor()
         
-        target_year = year if year is not None else datetime.now().year
-        table_name = f"bilibili_history_{target_year}"
-        
-        # 检查表是否存在
-        cursor.execute("""
-            SELECT count(name) FROM sqlite_master 
-            WHERE type='table' AND name=?
-        """, (table_name,))
-        
-        if cursor.fetchone()[0] == 0:
+        # 获取可用年份列表
+        available_years = get_available_years()
+        if not available_years:
             return {
                 "status": "error",
-                "message": f"未找到 {target_year} 年的历史记录数据"
+                "message": "未找到任何历史记录数据"
             }
-            
+        
+        # 如果未指定年份，使用最新的年份
+        target_year = year if year is not None else available_years[0]
+        
+        # 检查指定的年份是否可用
+        if year is not None and year not in available_years:
+            return {
+                "status": "error",
+                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
+            }
+        
+        table_name = f"bilibili_history_{target_year}"
         query = f"SELECT * FROM {table_name} WHERE 1=1"
         params = []
 
@@ -217,7 +270,9 @@ async def search_history(
                 "records": records,
                 "total": total,
                 "size": size,
-                "current": page
+                "current": page,
+                "year": target_year,
+                "available_years": available_years
             }
         }
 
