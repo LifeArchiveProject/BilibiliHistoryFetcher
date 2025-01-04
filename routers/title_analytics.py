@@ -2,16 +2,17 @@ import sqlite3
 from collections import Counter
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import jieba
 import numpy as np
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from sklearn.cluster import KMeans
 from sklearn.feature_extraction.text import TfidfVectorizer
 from snownlp import SnowNLP
 
 from scripts.utils import load_config, get_output_path
+from .title_pattern_discovery import discover_title_patterns, discover_interaction_patterns
 
 router = APIRouter()
 config = load_config()
@@ -43,6 +44,119 @@ def extract_keywords(titles: List[str], top_n: int = 20) -> List[Tuple[str, int]
     
     # 返回前N个最常见的词
     return word_freq.most_common(top_n)
+
+def analyze_keywords(titles_data: List[tuple]) -> List[Tuple[str, int]]:
+    """
+    从标题数据中提取关键词及其频率
+    
+    Args:
+        titles_data: 包含(title, duration, progress, tag_name, view_at)的元组列表
+    
+    Returns:
+        List[Tuple[str, int]]: 关键词和频率的列表
+    """
+    # 停用词列表（可以根据需要扩展）
+    stop_words = {'的', '了', '是', '在', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这'}
+    
+    # 所有标题分词后的结果
+    all_words = []
+    for title_data in titles_data:
+        title = title_data[0]  # 标题在元组的第一个位置
+        if not title:  # 跳过空标题
+            continue
+        words = jieba.cut(title)
+        # 过滤停用词和单字词（通常单字词不能很好地表达含义）
+        words = [w for w in words if w not in stop_words and len(w) > 1]
+        all_words.extend(words)
+    
+    # 统计词频
+    word_freq = Counter(all_words)
+    
+    # 返回前20个最常见的词
+    return word_freq.most_common(20)
+
+def analyze_completion_rates(titles_data: List[tuple]) -> Dict:
+    """
+    分析标题特征与完成率的关系
+    
+    Args:
+        titles_data: 包含(title, duration, progress, tag_name, view_at)的元组列表
+    
+    Returns:
+        Dict: 完成率分析结果
+    """
+    # 计算每个视频的完成率
+    completion_rates = []
+    titles = []
+    for title_data in titles_data:
+        title = title_data[0]
+        duration = float(title_data[1]) if title_data[1] else 0
+        progress = float(title_data[2]) if title_data[2] else 0
+        
+        if duration and progress:  # 确保数据有效
+            completion_rate = min(progress / duration, 1.0)  # 限制最大值为1
+            completion_rates.append(completion_rate)
+            titles.append(title)
+    
+    # 提取关键词
+    keywords = analyze_keywords([(title,) for title in titles])
+    
+    # 分析包含每个关键词的视频的平均完成率
+    keyword_completion_rates = {}
+    for keyword, _ in keywords:
+        rates = []
+        for title, rate in zip(titles, completion_rates):
+            if keyword in title:
+                rates.append(rate)
+        if rates:  # 如果有包含该关键词的视频
+            avg_rate = sum(rates) / len(rates)
+            keyword_completion_rates[keyword] = {
+                'average_completion_rate': avg_rate,
+                'video_count': len(rates)
+            }
+    
+    return keyword_completion_rates
+
+def generate_insights(keywords: List[Tuple[str, int]], completion_rates: Dict) -> List[str]:
+    """
+    根据关键词和完成率生成洞察
+    
+    Args:
+        keywords: 关键词和频率的列表
+        completion_rates: 完成率分析结果
+    
+    Returns:
+        List[str]: 洞察列表
+    """
+    insights = []
+    
+    # 1. 关键词频率洞察
+    top_keywords = [(word, count) for word, count in keywords[:5]]
+    if top_keywords:
+        insights.append(f"在您观看的视频中，最常出现的关键词是：{', '.join([f'{word}({count}次)' for word, count in top_keywords])}")
+    
+    # 2. 完成率洞察
+    if completion_rates:
+        # 按完成率排序
+        sorted_rates = sorted(
+            [(k, v['average_completion_rate'], v['video_count']) 
+             for k, v in completion_rates.items()],
+            key=lambda x: x[1],
+            reverse=True
+        )
+        
+        # 高完成率关键词（前3个）
+        high_completion = sorted_rates[:3]
+        if high_completion:
+            insights.append(f"包含关键词 {', '.join([f'{k}({rate:.1%})' for k, rate, count in high_completion])} 的视频往往会被您看完。")
+        
+        # 低完成率关键词（后3个）
+        low_completion = sorted_rates[-3:]
+        low_completion.reverse()  # 从低到高显示
+        if low_completion:
+            insights.append(f"而包含关键词 {', '.join([f'{k}({rate:.1%})' for k, rate, count in low_completion])} 的视频较少被看完。")
+    
+    return insights
 
 def analyze_title_completion_rate(conn: sqlite3.Connection) -> Dict:
     """
@@ -90,13 +204,14 @@ def analyze_title_completion_rate(conn: sqlite3.Connection) -> Dict:
         'top_keywords': keywords
     }
 
-def analyze_title_length(cursor) -> dict:
+def analyze_title_length(cursor, table_name: str) -> dict:
     """分析标题长度与观看行为的关系"""
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT title, duration, progress
-        FROM bilibili_history_2024
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
     
     length_stats = defaultdict(lambda: {'count': 0, 'completion_rates': []})
     
@@ -130,13 +245,14 @@ def analyze_title_length(cursor) -> dict:
         ]
     }
 
-def analyze_title_sentiment(cursor) -> dict:
+def analyze_title_sentiment(cursor, table_name: str) -> dict:
     """分析标题情感与观看行为的关系"""
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT title, duration, progress
-        FROM bilibili_history_2024
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
     
     sentiment_stats = {
         '积极': {'count': 0, 'completion_rates': []},
@@ -182,31 +298,30 @@ def analyze_title_sentiment(cursor) -> dict:
         ]
     }
 
-def analyze_title_patterns(cursor) -> dict:
+def analyze_title_patterns(cursor, table_name: str) -> dict:
     """分析标题模式与观看行为的关系"""
-    patterns = {
-        '教程': ['教程', '教学', '入门', '指南', '技巧', '方法', '怎么', '如何'],
-        '排名': ['排名', '榜单', 'TOP', '最佳', '最强', '最美', '第一'],
-        '解说': ['解说', '分析', '讲解', '详解', '探索', '揭秘'],
-        '评测': ['评测', '测评', '体验', '评价', '优缺点'],
-        '娱乐': ['搞笑', '有趣', '沙雕', '逗比', '泪目', '感动'],
-    }
-    
-    cursor.execute("""
-        SELECT title, duration, progress
-        FROM bilibili_history_2024
+    cursor.execute(f"""
+        SELECT title, duration, progress, tag_name, view_at
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
+    
+    titles_data = cursor.fetchall()
+    
+    # 使用模式发现功能，不再传递table_name参数
+    discovered_patterns = discover_title_patterns(titles_data)
     
     pattern_stats = defaultdict(lambda: {'count': 0, 'completion_rates': []})
     
-    for title, duration, progress in cursor.fetchall():
+    # 分析每个标题的完成率
+    for title, duration, progress, *_ in titles_data:
         completion_rate = progress / duration if duration > 0 else 0
         
-        # 检查标题属于哪种模式
+        # 检查标题属于哪个模式
         matched = False
-        for pattern_name, keywords in patterns.items():
-            if any(keyword in title for keyword in keywords):
+        for pattern_name, pattern_info in discovered_patterns.items():
+            if any(keyword in title for keyword in pattern_info['keywords']):
                 pattern_stats[pattern_name]['count'] += 1
                 pattern_stats[pattern_name]['completion_rates'].append(completion_rate)
                 matched = True
@@ -222,7 +337,8 @@ def analyze_title_patterns(cursor) -> dict:
         if stats['count'] > 0:
             results[pattern] = {
                 'count': stats['count'],
-                'avg_completion_rate': np.mean(stats['completion_rates'])
+                'avg_completion_rate': np.mean(stats['completion_rates']),
+                'keywords': discovered_patterns[pattern]['keywords'] if pattern in discovered_patterns else []
             }
     
     # 找出最受欢迎的模式
@@ -239,13 +355,14 @@ def analyze_title_patterns(cursor) -> dict:
         ]
     }
 
-def analyze_title_clusters(cursor) -> dict:
-    """使用K-means对标题进行主题聚类分析"""
-    cursor.execute("""
+def analyze_title_clusters(cursor, table_name: str) -> dict:
+    """分析标题聚类与观看行为的关系"""
+    cursor.execute(f"""
         SELECT title, duration, progress
-        FROM bilibili_history_2024
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
     
     titles = []
     completion_rates = []
@@ -298,20 +415,23 @@ def analyze_title_clusters(cursor) -> dict:
         ]
     }
 
-def analyze_title_trends(cursor) -> dict:
-    """分析标题关键词随时间的变化趋势"""
-    cursor.execute("""
-        SELECT title, view_at
-        FROM bilibili_history_2024
-        WHERE title IS NOT NULL
-        ORDER BY view_at
-    """)
+def analyze_title_trends(cursor, table_name: str) -> dict:
+    """分析标题趋势与观看行为的关系"""
+    cursor.execute(f"""
+        SELECT title, duration, progress, view_at
+        FROM {table_name}
+        WHERE duration > 0 AND title IS NOT NULL
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+        ORDER BY view_at ASC
+    """, (table_name.split('_')[-1],))
     
-    # 按月分组的关键词统计
+    # 按月分组的关键词统计和视频计数
     monthly_keywords = defaultdict(lambda: defaultdict(int))
+    monthly_video_count = defaultdict(int)  # 新增：每月视频计数
     
-    for title, view_at in cursor.fetchall():
+    for title, duration, progress, view_at in cursor.fetchall():
         month = datetime.fromtimestamp(view_at).strftime('%Y-%m')
+        monthly_video_count[month] += 1  # 新增：增加月度视频计数
         words = jieba.cut(title)
         for word in words:
             if len(word) > 1:  # 排除单字词
@@ -324,7 +444,7 @@ def analyze_title_trends(cursor) -> dict:
         top_keywords = sorted(keywords.items(), key=lambda x: x[1], reverse=True)[:5]
         trending_keywords[month] = {
             'top_keywords': top_keywords,
-            'total_videos': sum(keywords.values())
+            'total_videos': monthly_video_count[month]  # 修改：使用实际的月度视频数量
         }
     
     # 识别关键词趋势
@@ -356,29 +476,28 @@ def analyze_title_trends(cursor) -> dict:
         'insights': trend_insights
     }
 
-def analyze_title_interaction(cursor) -> dict:
-    """分析标题互动元素与观看行为的关系"""
-    interaction_patterns = {
-        '对话式': ['来聊聊', '一起', '讨论', '分享', '告诉你'],
-        '疑问式': ['为什么', '是什么', '怎么样', '如何'],
-        '悬念式': ['震惊', '万万没想到', '竟然', '居然', '惊人'],
-        '引导式': ['建议', '推荐', '必看', '不要错过'],
-    }
-    
-    cursor.execute("""
-        SELECT title, duration, progress
-        FROM bilibili_history_2024
+def analyze_title_interaction(cursor, table_name: str) -> dict:
+    """分析标题与用户互动的关系"""
+    cursor.execute(f"""
+        SELECT title, duration, progress, tag_name, view_at
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
+    
+    titles_data = cursor.fetchall()
+    
+    # 使用互动模式发现功能，不再传递table_name参数
+    discovered_patterns = discover_interaction_patterns(titles_data)
     
     interaction_stats = defaultdict(lambda: {'count': 0, 'completion_rates': []})
     
-    for title, duration, progress in cursor.fetchall():
+    for title, duration, progress, *_ in titles_data:
         completion_rate = progress / duration if duration > 0 else 0
         found_pattern = False
         
-        for pattern_type, keywords in interaction_patterns.items():
-            if any(keyword in title for keyword in keywords):
+        for pattern_type, pattern_info in discovered_patterns.items():
+            if any(keyword in title for keyword in pattern_info['keywords']):
                 interaction_stats[pattern_type]['count'] += 1
                 interaction_stats[pattern_type]['completion_rates'].append(completion_rate)
                 found_pattern = True
@@ -392,7 +511,8 @@ def analyze_title_interaction(cursor) -> dict:
         if stats['count'] > 0:
             results[pattern] = {
                 'count': stats['count'],
-                'avg_completion_rate': np.mean(stats['completion_rates'])
+                'avg_completion_rate': np.mean(stats['completion_rates']),
+                'keywords': discovered_patterns[pattern]['keywords'] if pattern in discovered_patterns else []
             }
     
     best_pattern = max(results.items(), key=lambda x: x[1]['avg_completion_rate'])
@@ -408,13 +528,14 @@ def analyze_title_interaction(cursor) -> dict:
         ]
     }
 
-def analyze_title_duration_correlation(cursor) -> dict:
+def analyze_title_duration_correlation(cursor, table_name: str) -> dict:
     """分析标题特征与视频时长的关系"""
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT title, duration, progress
-        FROM bilibili_history_2024
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
     
     # 按时长分组
     duration_groups = {
@@ -470,13 +591,19 @@ def analyze_title_duration_correlation(cursor) -> dict:
         ]
     }
 
-def analyze_title_feature_combinations(cursor) -> dict:
+def analyze_title_feature_combinations(cursor, table_name: str) -> dict:
     """分析标题特征组合与观看行为的关系"""
-    cursor.execute("""
-        SELECT title, duration, progress
-        FROM bilibili_history_2024
+    cursor.execute(f"""
+        SELECT title, duration, progress, tag_name, view_at
+        FROM {table_name}
         WHERE duration > 0 AND title IS NOT NULL
-    """)
+        AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+    """, (table_name.split('_')[-1],))
+    
+    titles_data = cursor.fetchall()
+    
+    # 获取标题模式
+    discovered_patterns = discover_title_patterns(titles_data)
     
     # 定义特征检测函数
     def get_sentiment(title):
@@ -488,22 +615,14 @@ def analyze_title_feature_combinations(cursor) -> dict:
         return '中性'
     
     def get_pattern(title):
-        patterns = {
-            '教程': ['教程', '教学', '入门', '指南', '技巧'],
-            '排名': ['排名', '榜单', 'TOP', '最佳', '最强'],
-            '解说': ['解说', '分析', '讲解', '详解', '探索'],
-            '评测': ['评测', '测评', '体验', '评价'],
-            '娱乐': ['搞笑', '有趣', '沙雕', '逗比']
-        }
-        
-        for pattern, keywords in patterns.items():
-            if any(keyword in title for keyword in keywords):
-                return pattern
+        for pattern_name, pattern_info in discovered_patterns.items():
+            if any(keyword in title for keyword in pattern_info['keywords']):
+                return pattern_name
         return '其他'
     
     combination_stats = defaultdict(lambda: {'count': 0, 'completion_rates': []})
     
-    for title, duration, progress in cursor.fetchall():
+    for title, duration, progress, *_ in titles_data:
         completion_rate = progress / duration if duration > 0 else 0
         
         # 获取标题特征组合
@@ -535,69 +654,119 @@ def analyze_title_feature_combinations(cursor) -> dict:
         ]
     }
 
-@router.get("/title-analytics")
-async def get_title_analytics():
-    """
-    获取标题分析结果，包括关键词分析和完成率关联分析
+def get_available_years():
+    """获取数据库中所有可用的年份"""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name LIKE 'bilibili_history_%'
+            ORDER BY name DESC
+        """)
+        
+        years = []
+        for (table_name,) in cursor.fetchall():
+            try:
+                year = int(table_name.split('_')[-1])
+                years.append(year)
+            except (ValueError, IndexError):
+                continue
+                
+        return sorted(years, reverse=True)
+    except sqlite3.Error as e:
+        print(f"获取年份列表时发生错误: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/")
+async def get_title_analytics(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取标题分析数据
+    
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+    
+    Returns:
+        dict: 包含标题分析的各个维度的数据
     """
     try:
         conn = get_db()
         cursor = conn.cursor()
         
-        # 获取所有有效的标题
-        cursor.execute("""
-            SELECT title
-            FROM bilibili_history_2024
-            WHERE title IS NOT NULL
-        """)
+        # 获取可用年份列表
+        available_years = get_available_years()
+        if not available_years:
+            return {
+                "status": "error",
+                "message": "未找到任何历史记录数据"
+            }
         
-        titles = [row[0] for row in cursor.fetchall() if row[0]]
+        # 如果未指定年份，使用最新的年份
+        target_year = year if year is not None else available_years[0]
         
-        # 提取关键词
-        keywords = extract_keywords(titles)
+        # 检查指定的年份是否可用
+        if year is not None and year not in available_years:
+            return {
+                "status": "error",
+                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
+            }
         
-        # 分析标题与完成率的关系
-        completion_analysis = analyze_title_completion_rate(conn)
+        table_name = f"bilibili_history_{target_year}"
+        
+        # 如果启用缓存，尝试从缓存获取完整响应
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'full_response')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的分析数据")
+                return cached_response
+        
+        # 获取所有标题，添加年份限制
+        cursor.execute(f"""
+            SELECT title, duration, progress, tag_name, view_at
+            FROM {table_name}
+            WHERE title IS NOT NULL AND title != ''
+            AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
+        """, (str(target_year),))
+        titles = cursor.fetchall()
+        
+        if not titles:
+            return {
+                "status": "error",
+                "message": "未找到任何有效的标题数据"
+            }
+        
+        print(f"开始分析 {target_year} 年的数据")
+        
+        # 分词和关键词提取
+        keywords = analyze_keywords(titles)
+        
+        # 分析完成率
+        completion_analysis = analyze_completion_rates(titles)
         
         # 生成洞察
-        insights = []
-        
-        # 1. 关键词频率洞察
-        insights.append(f"在您观看的视频中，最常出现的关键词是：{', '.join([f'{word}({count}次)' for word, count in keywords[:5]])}")
-        
-        # 2. 完成率洞察
-        completion_rates = completion_analysis['keyword_completion_rates']
-        if completion_rates:
-            # 按完成率排序
-            sorted_rates = sorted(
-                [(k, v['average_completion_rate'], v['video_count']) 
-                 for k, v in completion_rates.items()],
-                key=lambda x: x[1],
-                reverse=True
-            )
-            
-            # 高完成率关键词（前3个）
-            high_completion = sorted_rates[:3]
-            insights.append(f"包含关键词 {', '.join([f'{k}({rate:.1%})' for k, rate, count in high_completion])} 的视频往往会被您看完。")
-            
-            # 低完成率关键词（后3个）
-            low_completion = sorted_rates[-3:]
-            low_completion.reverse()  # 从低到高显示
-            insights.append(f"而包含关键词 {', '.join([f'{k}({rate:.1%})' for k, rate, count in low_completion])} 的视频较少被看完。")
+        insights = generate_insights(keywords, completion_analysis)
         
         # 获取新增的分析结果
-        length_analysis = analyze_title_length(cursor)
-        sentiment_analysis = analyze_title_sentiment(cursor)
-        pattern_analysis = analyze_title_patterns(cursor)
-        cluster_analysis = analyze_title_clusters(cursor)
-        trend_analysis = analyze_title_trends(cursor)
+        length_analysis = analyze_title_length(cursor, table_name)
+        sentiment_analysis = analyze_title_sentiment(cursor, table_name)
+        pattern_analysis = analyze_title_patterns(cursor, table_name)
+        cluster_analysis = analyze_title_clusters(cursor, table_name)
+        trend_analysis = analyze_title_trends(cursor, table_name)
         
         # 新增分析维度
-        interaction_analysis = analyze_title_interaction(cursor)
-        duration_correlation = analyze_title_duration_correlation(cursor)
-        feature_combinations = analyze_title_feature_combinations(cursor)
+        interaction_analysis = analyze_title_interaction(cursor, table_name)
+        duration_correlation = analyze_title_duration_correlation(cursor, table_name)
+        feature_combinations = analyze_title_feature_combinations(cursor, table_name)
         
-        return {
+        # 构建完整响应
+        response = {
             "status": "success",
             "data": {
                 "keyword_analysis": {
@@ -612,9 +781,19 @@ async def get_title_analytics():
                 "interaction_analysis": interaction_analysis,
                 "duration_correlation": duration_correlation,
                 "feature_combinations": feature_combinations,
-                "insights": insights
+                "insights": insights,
+                "year": target_year,
+                "available_years": available_years
             }
         }
+        
+        # 如果启用缓存，缓存完整响应
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            print(f"缓存 {target_year} 年的分析数据")
+            pattern_cache.cache_patterns(table_name, 'full_response', response)
+        
+        return response
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

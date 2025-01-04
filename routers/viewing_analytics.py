@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from typing import Optional, Dict, List
 from datetime import datetime
 import sqlite3
@@ -364,9 +364,9 @@ def analyze_completion_rates(cursor, table_name: str) -> dict:
     tag_stats = {}
     # 时长分布统计
     duration_stats = {
-        "短视频(≤5分钟)": {"video_count": 0, "total_completion": 0, "fully_watched": 0},
-        "中等视频(5-20分钟)": {"video_count": 0, "total_completion": 0, "fully_watched": 0},
-        "长视频(>20分钟)": {"video_count": 0, "total_completion": 0, "fully_watched": 0}
+        "短视频(≤5分钟)": {"video_count": 0, "total_completion": 0, "fully_watched": 0, "average_completion_rate": 0},
+        "中等视频(5-20分钟)": {"video_count": 0, "total_completion": 0, "fully_watched": 0, "average_completion_rate": 0},
+        "长视频(>20分钟)": {"video_count": 0, "total_completion": 0, "fully_watched": 0, "average_completion_rate": 0}
     }
     # 完成率分布
     completion_distribution = {
@@ -468,10 +468,13 @@ def analyze_completion_rates(cursor, table_name: str) -> dict:
     }
     
     # 计算各类视频的平均完成率和完整观看率
-    for stats in duration_stats.values():
+    for category, stats in duration_stats.items():
         if stats["video_count"] > 0:
             stats["average_completion_rate"] = round(stats["total_completion"] / stats["video_count"], 2)
             stats["fully_watched_rate"] = round(stats["fully_watched"] / stats["video_count"] * 100, 2)
+        else:
+            stats["average_completion_rate"] = 0
+            stats["fully_watched_rate"] = 0
     
     # 计算UP主平均完成率和完整观看率，并按观看数量筛选和排序
     filtered_authors = {}
@@ -523,45 +526,63 @@ def generate_completion_insights(completion_data: dict) -> dict:
     """生成视频完成率相关的洞察"""
     insights = {}
     
-    # 整体完成率洞察
-    overall = completion_data["overall_stats"]
-    insights["overall_completion"] = (
-        f"在观看的{overall['total_videos']}个视频中，你平均观看完成率为{overall['average_completion_rate']}%，"
-        f"完整看完的视频占比{overall['fully_watched_rate']}%，未开始观看的占比{overall['not_started_rate']}%。"
-    )
-    
-    # 视频时长偏好洞察
-    duration_stats = completion_data["duration_based_stats"]
-    max_completion_duration = max(duration_stats.items(), key=lambda x: x[1]["average_completion_rate"])
-    insights["duration_preference"] = (
-        f"你最容易看完的是{max_completion_duration[0]}，平均完成率达到{max_completion_duration[1]['average_completion_rate']}%，"
-        f"其中完整看完的视频占比{max_completion_duration[1]['fully_watched_rate']}%。"
-    )
-    
-    # 分区兴趣洞察
-    if completion_data["tag_completion_rates"]:
-        top_tag = list(completion_data["tag_completion_rates"].items())[0]
-        insights["tag_completion"] = (
-            f"在经常观看的分区中，你对{top_tag[0]}分区的视频最感兴趣，平均完成率达到{top_tag[1]['average_completion_rate']}%，"
-            f"观看过{top_tag[1]['video_count']}个该分区的视频。"
-        )
-    
-    # UP主偏好洞察
-    if completion_data["most_watched_authors"]:
-        most_watched = list(completion_data["most_watched_authors"].items())[0]
-        insights["most_watched_author"] = (
-            f"你观看最多的UP主是{most_watched[0]}，观看了{most_watched[1]['video_count']}个视频，"
-            f"平均完成率为{most_watched[1]['average_completion_rate']}%。"
-        )
-    
-    if completion_data["highest_completion_authors"]:
-        highest_completion = list(completion_data["highest_completion_authors"].items())[0]
-        if highest_completion[0] != list(completion_data["most_watched_authors"].items())[0][0]:
-            insights["highest_completion_author"] = (
-                f"在经常观看的UP主中，你对{highest_completion[0]}的视频完成度最高，"
-                f"平均完成率达到{highest_completion[1]['average_completion_rate']}%，"
-                f"观看过{highest_completion[1]['video_count']}个视频。"
+    try:
+        # 整体完成率洞察
+        overall = completion_data.get("overall_stats", {})
+        if overall:
+            insights["overall_completion"] = (
+                f"在观看的{overall.get('total_videos', 0)}个视频中，你平均观看完成率为{overall.get('average_completion_rate', 0)}%，"
+                f"完整看完的视频占比{overall.get('fully_watched_rate', 0)}%，未开始观看的占比{overall.get('not_started_rate', 0)}%。"
             )
+        
+        # 视频时长偏好洞察
+        duration_stats = completion_data.get("duration_based_stats", {})
+        if duration_stats:
+            valid_durations = [(k, v) for k, v in duration_stats.items() 
+                             if v.get("video_count", 0) > 0 and v.get("average_completion_rate", 0) > 0]
+            if valid_durations:
+                max_completion_duration = max(valid_durations, key=lambda x: x[1].get("average_completion_rate", 0))
+                insights["duration_preference"] = (
+                    f"你最容易看完的是{max_completion_duration[0]}，平均完成率达到{max_completion_duration[1].get('average_completion_rate', 0)}%，"
+                    f"其中完整看完的视频占比{max_completion_duration[1].get('fully_watched_rate', 0)}%。"
+                )
+        
+        # 分区兴趣洞察
+        tag_rates = completion_data.get("tag_completion_rates", {})
+        if tag_rates:
+            valid_tags = [(k, v) for k, v in tag_rates.items() 
+                         if v.get("video_count", 0) >= 5]  # 只考虑观看数量>=5的分区
+            if valid_tags:
+                top_tag = max(valid_tags, key=lambda x: x[1].get("average_completion_rate", 0))
+                insights["tag_completion"] = (
+                    f"在经常观看的分区中，你对{top_tag[0]}分区的视频最感兴趣，平均完成率达到{top_tag[1].get('average_completion_rate', 0)}%，"
+                    f"观看过{top_tag[1].get('video_count', 0)}个该分区的视频。"
+                )
+        
+        # UP主偏好洞察
+        most_watched = completion_data.get("most_watched_authors", {})
+        if most_watched:
+            top_watched = next(iter(most_watched.items()), None)
+            if top_watched:
+                insights["most_watched_author"] = (
+                    f"你观看最多的UP主是{top_watched[0]}，观看了{top_watched[1].get('video_count', 0)}个视频，"
+                    f"平均完成率为{top_watched[1].get('average_completion_rate', 0)}%。"
+                )
+        
+        highest_completion = completion_data.get("highest_completion_authors", {})
+        if highest_completion and most_watched:
+            top_completion = next(iter(highest_completion.items()), None)
+            if top_completion and top_completion[0] != next(iter(most_watched.keys())):
+                insights["highest_completion_author"] = (
+                    f"在经常观看的UP主中，你对{top_completion[0]}的视频完成度最高，"
+                    f"平均完成率达到{top_completion[1].get('average_completion_rate', 0)}%，"
+                    f"观看过{top_completion[1].get('video_count', 0)}个视频。"
+                )
+    
+    except Exception as e:
+        print(f"Error generating completion insights: {str(e)}")
+        # 返回一个基础的洞察信息
+        insights["basic_completion"] = "暂时无法生成详细的观看完成率分析。"
     
     return insights
 
@@ -696,87 +717,102 @@ def generate_watch_count_insights(watch_count_data: dict) -> dict:
     """生成视频观看次数相关的洞察"""
     insights = {}
     
-    # 重复观看统计洞察
-    rewatch_stats = watch_count_data["rewatch_stats"]
-    total_videos = rewatch_stats['total_unique_videos']
-    rewatched_videos = rewatch_stats['total_rewatched_videos']
-    rewatch_rate = rewatch_stats['rewatch_rate']
-    total_rewatches = rewatch_stats['total_rewatch_count']
-    avg_watches_per_video = round(total_rewatches/rewatched_videos + 1, 1)
-    
-    insights["rewatch_overview"] = (
-        f"在你观看的{total_videos}个视频中，有{rewatched_videos}个视频被重复观看，"
-        f"重复观看率为{rewatch_rate}%。这些视频总共被额外观看了{total_rewatches}次，"
-        f"平均每个重复观看的视频被看了{avg_watches_per_video}次。"
-    )
-    
-    # 最多观看视频洞察
-    if watch_count_data["most_watched_videos"]:
-        top_videos = watch_count_data["most_watched_videos"][:3]  # 取前三
-        top_video = top_videos[0]
+    try:
+        # 重复观看统计洞察
+        rewatch_stats = watch_count_data.get("rewatch_stats", {})
+        total_videos = rewatch_stats.get('total_unique_videos', 0)
+        rewatched_videos = rewatch_stats.get('total_rewatched_videos', 0)
+        rewatch_rate = rewatch_stats.get('rewatch_rate', 0)
+        total_rewatches = rewatch_stats.get('total_rewatch_count', 0)
         
-        # 计算平均重看间隔（天）
-        avg_interval_days = round(top_video['avg_interval'] / (24 * 3600), 1)
-        
-        insights["most_watched_videos"] = (
-            f"你最喜欢的视频是{top_video['author_name']}的《{top_video['title']}》，"
-            f"共观看了{top_video['watch_count']}次，平均每{avg_interval_days}天就会重看一次。"
-        )
-        
-        if len(top_videos) > 1:
-            other_favorites = [
-                f"{v['author_name']}的《{v['title']}》({v['watch_count']}次)"
-                for v in top_videos[1:3]
-            ]
-            insights["most_watched_videos"] += (
-                f"紧随其后的是{' 和 '.join(other_favorites)}。"
+        if rewatched_videos > 0:
+            avg_watches_per_video = round(total_rewatches/rewatched_videos + 1, 1)
+            insights["rewatch_overview"] = (
+                f"在你观看的{total_videos}个视频中，有{rewatched_videos}个视频被重复观看，"
+                f"重复观看率为{rewatch_rate}%。这些视频总共被额外观看了{total_rewatches}次，"
+                f"平均每个重复观看的视频被看了{avg_watches_per_video}次。"
             )
-    
-    # 重复观看视频时长分布洞察
-    duration_dist = watch_count_data["duration_distribution"]
-    if duration_dist:
-        total_rewatched = sum(duration_dist.values())
-        duration_percentages = {
-            k: round(v/total_rewatched * 100, 1)
-            for k, v in duration_dist.items()
-        }
-        sorted_durations = sorted(
-            duration_percentages.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )
+        else:
+            insights["rewatch_overview"] = f"在你观看的{total_videos}个视频中，暂时还没有重复观看的视频。"
         
-        insights["duration_preference"] = (
-            f"在重复观看的视频中，{sorted_durations[0][0]}最多，占比{sorted_durations[0][1]}%。"
-            f"其次是{sorted_durations[1][0]}({sorted_durations[1][1]}%)，"
-            f"而{sorted_durations[2][0]}占比{sorted_durations[2][1]}%。"
-            f"这表明你在重复观看时更偏好{sorted_durations[0][0].replace('视频', '')}的内容。"
-        )
-    
-    # 重复观看分区分布洞察
-    tag_dist = watch_count_data["tag_distribution"]
-    if tag_dist:
-        top_tags = sorted(tag_dist.items(), key=lambda x: x[1], reverse=True)[:3]
-        total_tags = sum(tag_dist.values())
+        # 最多观看视频洞察
+        most_watched = watch_count_data.get("most_watched_videos", [])
+        if most_watched:
+            top_videos = most_watched[:3]  # 取前三
+            top_video = top_videos[0]
+            
+            # 计算平均重看间隔（天）
+            avg_interval_days = round(top_video.get('avg_interval', 0) / (24 * 3600), 1)
+            
+            if avg_interval_days > 0:
+                insights["most_watched_videos"] = (
+                    f"你最喜欢的视频是{top_video.get('author_name', '未知作者')}的《{top_video.get('title', '未知视频')}》，"
+                    f"共观看了{top_video.get('watch_count', 0)}次，平均每{avg_interval_days}天就会重看一次。"
+                )
+            else:
+                insights["most_watched_videos"] = (
+                    f"你最喜欢的视频是{top_video.get('author_name', '未知作者')}的《{top_video.get('title', '未知视频')}》，"
+                    f"共观看了{top_video.get('watch_count', 0)}次。"
+                )
+            
+            if len(top_videos) > 1:
+                other_favorites = [
+                    f"{v.get('author_name', '未知作者')}的《{v.get('title', '未知视频')}》({v.get('watch_count', 0)}次)"
+                    for v in top_videos[1:3]
+                ]
+                insights["most_watched_videos"] += f"紧随其后的是{' 和 '.join(other_favorites)}。"
         
-        tag_insights = []
-        for tag, count in top_tags:
-            percentage = round(count/total_tags * 100, 1)
-            tag_insights.append(f"{tag}({count}个视频, {percentage}%)")
+        # 重复观看视频时长分布洞察
+        duration_dist = watch_count_data.get("duration_distribution", {})
+        if duration_dist:
+            total_rewatched = sum(duration_dist.values())
+            if total_rewatched > 0:
+                duration_percentages = {
+                    k: round(v/total_rewatched * 100, 1)
+                    for k, v in duration_dist.items()
+                }
+                sorted_durations = sorted(
+                    duration_percentages.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+                
+                insights["duration_preference"] = (
+                    f"在重复观看的视频中，{sorted_durations[0][0]}最多，占比{sorted_durations[0][1]}%。"
+                    f"其次是{sorted_durations[1][0]}({sorted_durations[1][1]}%)，"
+                    f"而{sorted_durations[2][0]}占比{sorted_durations[2][1]}%。"
+                    f"这表明你在重复观看时更偏好{sorted_durations[0][0].replace('视频', '')}的内容。"
+                )
         
-        insights["tag_preference"] = (
-            f"你最常重复观看的内容类型是{tag_insights[0]}。"
-            f"紧随其后的是{' 和 '.join(tag_insights[1:])}。"
-            f"这反映出你对技术学习、日常娱乐和音乐内容特别感兴趣。"
-        )
+        # 重复观看分区分布洞察
+        tag_dist = watch_count_data.get("tag_distribution", {})
+        if tag_dist:
+            total_tags = sum(tag_dist.values())
+            if total_tags > 0:
+                top_tags = sorted(tag_dist.items(), key=lambda x: x[1], reverse=True)[:3]
+                
+                tag_insights = []
+                for tag, count in top_tags:
+                    percentage = round(count/total_tags * 100, 1)
+                    tag_insights.append(f"{tag}({count}个视频, {percentage}%)")
+                
+                insights["tag_preference"] = (
+                    f"你最常重复观看的内容类型是{tag_insights[0]}。"
+                    f"紧随其后的是{' 和 '.join(tag_insights[1:])}。"
+                )
+        
+        # 生成总体观看行为总结
+        if rewatched_videos > 0:
+            insights["behavior_summary"] = (
+                f"总的来说，你是一位{_get_rewatch_habit_description(rewatch_rate)}。"
+                f"你特别喜欢重复观看{_get_preferred_content_type(tag_dist, duration_dist)}的内容。"
+            )
+        else:
+            insights["behavior_summary"] = "总的来说，你喜欢探索新的内容，很少重复观看同一个视频。"
     
-    # 生成总体观看行为总结
-    insights["behavior_summary"] = (
-        f"总的来说，你是一位{_get_rewatch_habit_description(rewatch_rate)}。"
-        f"你特别喜欢重复观看{_get_preferred_content_type(tag_dist, duration_dist)}的内容。"
-        f"从重复观看的内容来看，你既注重自我提升（技术学习），"
-        f"也懂得享受生活（音乐、日常娱乐），是一个追求平衡的B站用户。"
-    )
+    except Exception as e:
+        print(f"Error generating watch count insights: {str(e)}")
+        insights["basic_watch_count"] = "暂时无法生成详细的重复观看分析。"
     
     return insights
 
@@ -799,31 +835,80 @@ def _get_preferred_content_type(tag_dist: dict, duration_dist: dict) -> str:
     
     return f"{top_duration.replace('视频', '')}的{top_tag}"
 
-@router.get("/viewing-analytics", summary="获取观看时间分布分析")
-async def get_viewing_analytics():
+def get_available_years():
+    """获取数据库中所有可用的年份"""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name LIKE 'bilibili_history_%'
+            ORDER BY name DESC
+        """)
+        
+        years = []
+        for (table_name,) in cursor.fetchall():
+            try:
+                year = int(table_name.split('_')[-1])
+                years.append(year)
+            except (ValueError, IndexError):
+                continue
+                
+        return sorted(years, reverse=True)
+    except sqlite3.Error as e:
+        print(f"获取年份列表时发生错误: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/")
+async def get_viewing_analytics(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
     """获取用户观看时间分布分析
     
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+    
     Returns:
-        dict: 包含以下数据：
-        - monthly_stats: 月度观看统计
-        - weekly_stats: 每周观看分布
-        - daily_time_slots: 每日时段分布
-        - peak_hours: 最活跃时段TOP5
-        - max_daily_record: 最高单日观看记录
-        - viewing_continuity: 观看习惯连续性分析
-        - time_investment: 时间投入强度分析
-        - seasonal_patterns: 季节性观看模式分析
-        - holiday_patterns: 假期与工作日对比分析
-        - duration_correlation: 视频时长与时间段关联分析
-        - completion_rates: 视频完成率分析
-        - watch_counts: 视频观看次数分析
-        - insights: 数据洞察和个性化解读
+        dict: 包含观看时间分布分析的各个维度的数据
     """
     conn = get_db()
     try:
         cursor = conn.cursor()
-        current_year = get_current_year()
-        table_name = f"bilibili_history_{current_year}"
+        
+        # 获取可用年份列表
+        available_years = get_available_years()
+        if not available_years:
+            return {
+                "status": "error",
+                "message": "未找到任何历史记录数据"
+            }
+        
+        # 如果未指定年份，使用最新的年份
+        target_year = year if year is not None else available_years[0]
+        
+        # 检查指定的年份是否可用
+        if year is not None and year not in available_years:
+            return {
+                "status": "error",
+                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
+            }
+        
+        table_name = f"bilibili_history_{target_year}"
+        
+        # 如果启用缓存，尝试从缓存获取完整响应
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'viewing_analytics')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的观看时间分析数据")
+                return cached_response
+        
+        print(f"开始分析 {target_year} 年的观看时间数据")
         
         # 1. 月度观看统计
         cursor.execute(f"""
@@ -837,6 +922,10 @@ async def get_viewing_analytics():
         monthly_stats = {row[0]: row[1] for row in cursor.fetchall()}
         
         # 2. 每周观看分布（0=周日，1-6=周一至周六）
+        weekday_mapping = {'0': '周日', '1': '周一', '2': '周二', '3': '周三', 
+                          '4': '周四', '5': '周五', '6': '周六'}
+        # 初始化所有星期的默认值为0
+        weekly_stats = {day: 0 for day in weekday_mapping.values()}
         cursor.execute(f"""
             SELECT 
                 strftime('%w', datetime(view_at, 'unixepoch')) as weekday,
@@ -845,9 +934,9 @@ async def get_viewing_analytics():
             GROUP BY weekday
             ORDER BY weekday
         """)
-        weekday_mapping = {'0': '周日', '1': '周一', '2': '周二', '3': '周三', 
-                          '4': '周四', '5': '周五', '6': '周六'}
-        weekly_stats = {weekday_mapping[row[0]]: row[1] for row in cursor.fetchall()}
+        # 更新有数据的星期的值
+        for row in cursor.fetchall():
+            weekly_stats[weekday_mapping[row[0]]] = row[1]
         
         # 3. 每日时段分布（按小时统计）
         cursor.execute(f"""
@@ -943,22 +1032,38 @@ async def get_viewing_analytics():
         # 生成重复观看洞察
         watch_count_insights = generate_watch_count_insights(watch_count_data)
         
-        # 合并所有数据
-        return {
-            'monthly_stats': monthly_stats,
-            'weekly_stats': weekly_stats,
-            'daily_time_slots': daily_time_slots,
-            'peak_hours': peak_hours,
-            'max_daily_record': max_daily_record,
-            'viewing_continuity': continuity_data,
-            'time_investment': time_investment_data,
-            'seasonal_patterns': seasonal_data,
-            'holiday_patterns': holiday_data,
-            'duration_correlation': duration_correlation_data,
-            'completion_rates': completion_data,
-            'watch_counts': watch_count_data,
-            'insights': {**insights, **extended_insights, **watch_count_insights}
+        # 构建完整响应
+        response = {
+            "status": "success",
+            "data": {
+                'monthly_stats': monthly_stats,
+                'weekly_stats': weekly_stats,
+                'daily_time_slots': daily_time_slots,
+                'peak_hours': peak_hours,
+                'max_daily_record': max_daily_record,
+                'viewing_continuity': continuity_data,
+                'time_investment': time_investment_data,
+                'seasonal_patterns': seasonal_data,
+                'holiday_patterns': holiday_data,
+                'duration_correlation': duration_correlation_data,
+                'completion_rates': completion_data,
+                'watch_counts': watch_count_data,
+                'insights': {**insights, **extended_insights, **watch_count_insights},
+                'year': target_year,
+                'available_years': available_years
+            }
         }
         
+        # 如果启用缓存，缓存完整响应
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            print(f"缓存 {target_year} 年的观看时间分析数据")
+            pattern_cache.cache_patterns(table_name, 'viewing_analytics', response)
+        
+        return response
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
-        conn.close()
+        if conn:
+            conn.close()
