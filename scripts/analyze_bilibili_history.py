@@ -282,30 +282,95 @@ def get_monthly_counts(year=None):
     finally:
         conn.close()
 
-def get_daily_and_monthly_counts():
-    """获取每日和每月的观看数量统计"""
+def get_available_years():
+    """获取可用的年份列表"""
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name LIKE 'bilibili_history_%'
+        """)
+        tables = cursor.fetchall()
+        years = []
+        for (table_name,) in tables:
+            try:
+                year = int(table_name.split('_')[-1])
+                years.append(year)
+            except (ValueError, IndexError):
+                continue
+        return sorted(years, reverse=True)
+    except sqlite3.Error as e:
+        print(f"数据库错误: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_daily_and_monthly_counts(target_year=None):
+    """获取每日和每月的观看数量统计
+    
+    Args:
+        target_year: 要分析的年份，不传则使用当前年份
+    """
     current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"========== 运行时间: {current_time} ==========")
     
-    # 获取所有年份的数据
-    daily_count = get_daily_counts()
-    if isinstance(daily_count, dict) and "error" in daily_count:
-        return {"error": daily_count["error"]}
+    # 如果未指定年份，使用当前年份
+    if target_year is None:
+        target_year = get_current_year()
+    
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        table_name = f"bilibili_history_{target_year}"
         
-    monthly_count = get_monthly_counts()
-    if isinstance(monthly_count, dict) and "error" in monthly_count:
-        return {"error": monthly_count["error"]}
-    
-    # 输出每月的视频观看统计
-    print("\n每月观看视频数量：")
-    for month, count in sorted(monthly_count.items()):
-        print(f"{month}: {count} 个视频")
-    
-    return {
-        "daily_count": daily_count,
-        "monthly_count": monthly_count,
-        "total_count": sum(daily_count.values())
-    }
+        # 检查表是否存在
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (table_name,))
+        
+        if not cursor.fetchone():
+            return {"error": f"未找到 {target_year} 年的历史记录数据"}
+        
+        # 获取每日观看数量
+        cursor.execute(f"""
+            SELECT 
+                strftime('%Y-%m-%d', datetime(view_at, 'unixepoch')) as date,
+                COUNT(*) as count
+            FROM {table_name}
+            GROUP BY date
+            ORDER BY date
+        """)
+        daily_count = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # 获取每月观看数量
+        cursor.execute(f"""
+            SELECT 
+                strftime('%Y-%m', datetime(view_at, 'unixepoch')) as month,
+                COUNT(*) as count
+            FROM {table_name}
+            GROUP BY month
+            ORDER BY month
+        """)
+        monthly_count = {row[0]: row[1] for row in cursor.fetchall()}
+        
+        # 输出每月的视频观看统计
+        print("\n每月观看视频数量：")
+        for month, count in sorted(monthly_count.items()):
+            print(f"{month}: {count} 个视频")
+        
+        return {
+            "daily_count": daily_count,
+            "monthly_count": monthly_count,
+            "total_count": sum(daily_count.values())
+        }
+        
+    except sqlite3.Error as e:
+        print(f"数据库错误: {e}")
+        return {"error": f"数据库错误: {e}"}
+    finally:
+        conn.close()
 
 # 如果该脚本直接运行，则调用 main()
 if __name__ == '__main__':
