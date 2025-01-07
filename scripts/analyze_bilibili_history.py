@@ -333,10 +333,10 @@ def get_daily_and_monthly_counts(target_year=None):
         if not cursor.fetchone():
             return {"error": f"未找到 {target_year} 年的历史记录数据"}
         
-        # 获取每日观看数量
+        # 获取每日观看数量，使用localtime进行时区转换
         cursor.execute(f"""
             SELECT 
-                strftime('%Y-%m-%d', datetime(view_at, 'unixepoch')) as date,
+                strftime('%Y-%m-%d', datetime(view_at, 'unixepoch', 'localtime')) as date,
                 COUNT(*) as count
             FROM {table_name}
             GROUP BY date
@@ -344,10 +344,10 @@ def get_daily_and_monthly_counts(target_year=None):
         """)
         daily_count = {row[0]: row[1] for row in cursor.fetchall()}
         
-        # 获取每月观看数量
+        # 获取每月观看数量，使用localtime进行时区转换
         cursor.execute(f"""
             SELECT 
-                strftime('%Y-%m', datetime(view_at, 'unixepoch')) as month,
+                strftime('%Y-%m', datetime(view_at, 'unixepoch', 'localtime')) as month,
                 COUNT(*) as count
             FROM {table_name}
             GROUP BY month
@@ -360,6 +360,13 @@ def get_daily_and_monthly_counts(target_year=None):
         for month, count in sorted(monthly_count.items()):
             print(f"{month}: {count} 个视频")
         
+        # 保存每日观看数量到JSON文件
+        try:
+            output_file = save_daily_count_to_json(daily_count, target_year)
+            print(f"每日观看数量已保存到: {output_file}")
+        except Exception as e:
+            print(f"保存JSON文件时出错: {e}")
+        
         return {
             "daily_count": daily_count,
             "monthly_count": monthly_count,
@@ -370,7 +377,8 @@ def get_daily_and_monthly_counts(target_year=None):
         print(f"数据库错误: {e}")
         return {"error": f"数据库错误: {e}"}
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # 如果该脚本直接运行，则调用 main()
 if __name__ == '__main__':
