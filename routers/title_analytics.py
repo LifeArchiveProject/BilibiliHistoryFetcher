@@ -727,6 +727,8 @@ async def get_title_analytics(
                 print(f"从缓存获取 {target_year} 年的分析数据")
                 return cached_response
         
+        print(f"开始分析 {target_year} 年的数据")
+        
         # 获取所有标题，添加年份限制
         cursor.execute(f"""
             SELECT title, duration, progress, tag_name, view_at
@@ -741,8 +743,6 @@ async def get_title_analytics(
                 "status": "error",
                 "message": "未找到任何有效的标题数据"
             }
-        
-        print(f"开始分析 {target_year} 年的数据")
         
         # 分词和关键词提取
         keywords = analyze_keywords(titles)
@@ -787,11 +787,10 @@ async def get_title_analytics(
             }
         }
         
-        # 如果启用缓存，缓存完整响应
-        if use_cache:
-            from .title_pattern_discovery import pattern_cache
-            print(f"缓存 {target_year} 年的分析数据")
-            pattern_cache.cache_patterns(table_name, 'full_response', response)
+        # 无论是否启用缓存，都更新缓存数据
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'full_response', response)
         
         return response
         

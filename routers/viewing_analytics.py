@@ -1054,11 +1054,10 @@ async def get_viewing_analytics(
             }
         }
         
-        # 如果启用缓存，缓存完整响应
-        if use_cache:
-            from .title_pattern_discovery import pattern_cache
-            print(f"缓存 {target_year} 年的观看时间分析数据")
-            pattern_cache.cache_patterns(table_name, 'viewing_analytics', response)
+        # 无论是否启用缓存，都更新缓存数据
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的观看时间分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'viewing_analytics', response)
         
         return response
         

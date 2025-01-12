@@ -22,8 +22,6 @@ class PatternCache:
         else:
             self.cache_dir = cache_dir
             
-        self.cache_duration = timedelta(hours=24)  # 缓存有效期为24小时
-        
         # 确保缓存目录存在并设置正确的权限
         try:
             print(f"尝试创建缓存目录: {self.cache_dir}")
@@ -91,28 +89,12 @@ class PatternCache:
             pattern_type: 模式类型（'title' 或 'interaction'）
         
         Returns:
-            Dict | None: 缓存的模式数据，如果缓存无效则返回None
+            Dict | None: 缓存的模式数据，如果缓存不存在则返回None
         """
         try:
             cache_path = self._get_cache_path(table_name, pattern_type)
             if not os.path.exists(cache_path):
                 print(f"缓存文件不存在: {cache_path}")
-                return None
-            
-            # 检查缓存是否过期
-            mtime = os.path.getmtime(cache_path)
-            cache_time = datetime.fromtimestamp(mtime)
-            expire_time = cache_time + self.cache_duration
-            now = datetime.now()
-            
-            if now > expire_time:
-                print(f"缓存已过期: {cache_path}")
-                print(f"缓存时间: {cache_time}, 过期时间: {expire_time}, 当前时间: {now}")
-                try:
-                    os.remove(cache_path)
-                    print(f"已删除过期缓存: {cache_path}")
-                except Exception as e:
-                    print(f"删除过期缓存失败: {str(e)}")
                 return None
             
             print(f"读取缓存文件: {cache_path}")
