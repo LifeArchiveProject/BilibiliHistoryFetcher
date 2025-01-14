@@ -54,28 +54,21 @@ base_url: http://localhost:8899
 
 # 任务配置
 tasks:
-  # 1. 获取B站历史记录 - 改为每天0点执行
+  # 1. 获取B站历史记录 - 每天0点执行
   fetch_history:
     name: 获取B站历史记录
     endpoint: "/fetch/bili-history"
     method: "GET"
-    params: {
-      "output_dir": "history_by_date"
-    }
     schedule:
-      type: "daily"    # 改为每日执行
-      time: "00:00"    # 设置为0点执行
+      type: "daily"
+      time: "00:00"
     requires: []
 
-  # 2. 导入数据库 - 保持链式执行不变
+  # 2. 导入数据库 - 链式执行
   import_data:
     name: 导入数据到数据库
     endpoint: "/importSqlite/import_data_sqlite"
     method: "POST"
-    params: {
-      "db_path": "database/bilibili_history.db",
-      "data_dir": "history_by_date"
-    }
     schedule:
       type: "chain"
     requires:
@@ -86,10 +79,6 @@ tasks:
     name: 分析历史数据
     endpoint: "/analysis/analyze"
     method: "POST"
-    params: {
-      "output_dir": "output/analysis",
-      "db_path": "output/database/bilibili_history.db"
-    }
     schedule:
       type: "chain"
     requires:
@@ -100,10 +89,6 @@ tasks:
     name: 生成观看热力图
     endpoint: "/heatmap/generate_heatmap"
     method: "POST"
-    params: {
-      "output_dir": "output/heatmap",
-      "data_path": "output/analysis/data.json"
-    }
     schedule:
       type: "chain"
     requires:

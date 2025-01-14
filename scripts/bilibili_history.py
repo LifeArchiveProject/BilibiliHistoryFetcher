@@ -151,7 +151,6 @@ def fetch_and_compare_history(cookie, latest_date):
     print(f"状态码: {response.status_code}")
     try:
         response_data = response.json()
-        print(f"响应内容: {response_data}")
         if response_data.get('code') == -101:
             print("Cookie 已失效，请更新 SESSDATA")
             return []
