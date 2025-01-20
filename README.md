@@ -1,7 +1,9 @@
 # Bilibili History Analyzer (获取B站历史记录并进行分析的工具)
 
 由于b站历史只会显示最近几个月的，所以历史记录会慢慢过期，因此该项目用于获取、处理、分析和可视化哔哩哔哩用户的观看历史数据。它提供了完整的数据处理流程，从数据获取到可视化展示，并支持自动化运行和邮件通知。
-<img src="heatmap.png" alt="heatmap" width="500" height="auto">
+
+## 配套前端请前往此项目[BiliHistoryFrontend](https://github.com/2977094657/BiliHistoryFrontend) 
+
 ## 主要功能
 
 1. **数据获取与存储**
@@ -75,7 +77,7 @@ python main.py
 
 基础URL: `http://localhost:8899`
 
-### 主要接口
+### 部分主要接口
 - `/BiliHistory2024/all`: 获取历史记录
 - `/BiliHistory2024/search`: 搜索历史记录
 - `/analysis/analyze`: 分析数据
@@ -124,15 +126,10 @@ output/
 
 ## 常见问题
 
-1. **Cookie失效问题**
+1. **Cookie经常失效**
    - 删除localStorage中的`ac_time_value`
    - 重新获取SESSDATA
    - 更新配置文件
-
-2. **数据不完整**
-   - 检查网络连接
-   - 验证Cookie有效性
-   - 查看错误日志
 
 ## 贡献指南
 
