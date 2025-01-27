@@ -22,7 +22,8 @@ from routers import (
     categories,
     viewing_analytics,
     title_analytics,
-    daily_count
+    daily_count,
+    login
 )
 from scripts.scheduler_manager import SchedulerManager
 from scripts.utils import load_config
@@ -235,6 +236,7 @@ app.include_router(categories.router, prefix="/BiliHistory2024", tags=["Categori
 app.include_router(viewing_analytics.router, prefix="/viewing-analytics", tags=["ViewingAnalytics"])
 app.include_router(title_analytics.router, prefix="/title-analytics", tags=["TitleAnalytics"])
 app.include_router(daily_count.router, prefix="/stats", tags=["统计数据"])
+app.include_router(login.router, prefix="/login", tags=["Login"])
 
 # 入口点，启动应用
 if __name__ == "__main__":

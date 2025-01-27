@@ -159,6 +159,9 @@ def fetch_and_compare_history(cookie, latest_date):
     
     all_new_data = []
     page_count = 0
+    last_view_at = None  # 记录最后一条数据的时间
+    empty_page_count = 0  # 记录连续空页面的次数
+    max_empty_pages = 3   # 最大允许的连续空页面次数
 
     if latest_date:
         # 直接使用最新日期的时间戳作为停止条件
@@ -183,6 +186,45 @@ def fetch_and_compare_history(cookie, latest_date):
                 if 'data' in data and 'list' in data['data']:
                     fetched_list = data['data']['list']
                     print(f"获取到{len(fetched_list)}条记录，进行对比...")
+
+                    # 如果获取到0条记录，检查是否是因为到达了最后一页
+                    if len(fetched_list) == 0:
+                        empty_page_count += 1
+                        print(f"连续获取到空页面 {empty_page_count}/{max_empty_pages}")
+                        
+                        if empty_page_count >= max_empty_pages:
+                            print(f"连续{max_empty_pages}次获取到空页面，停止请求。")
+                            break
+                            
+                        if 'cursor' in data['data']:
+                            # 检查新的游标时间是否大于最后一条记录的时间
+                            new_view_at = data['data']['cursor']['view_at']
+                            current_max = data['data']['cursor']['max']
+                            
+                            # 如果游标被重置（max变为0或很小的值），说明已经到达末尾
+                            if current_max == 0 or (last_view_at and current_max < 1000000):
+                                print(f"检测到游标重置（max={current_max}），停止请求。")
+                                break
+                                
+                            if last_view_at and new_view_at >= last_view_at:
+                                print(f"检测到重复数据（当前游标时间 {new_view_at} >= 最后记录时间 {last_view_at}），停止请求。")
+                                break
+                                
+                            params['max'] = current_max
+                            params['view_at'] = new_view_at
+                            print(f"获取到空页，尝试继续请求。游标更新：max={params['max']}, view_at={params['view_at']}")
+                            continue
+                        else:
+                            print("没有更多数据，停止请求。")
+                            break
+                    else:
+                        # 重置空页面计数
+                        empty_page_count = 0
+
+                    # 更新最后一条记录的时间
+                    if fetched_list:
+                        last_view_at = fetched_list[-1]['view_at']
+                        print(f"更新最后记录时间: {last_view_at}")
 
                     for entry in fetched_list:
                         print(f"标题: {entry['title']}, 观看时间: {datetime.fromtimestamp(entry['view_at'])}")
