@@ -250,6 +250,10 @@ def import_data_from_json(conn, table_name, file_path, last_import_time=0, batch
                 else:
                     main_category = '待定'
 
+            # 从正确的位置获取duration和progress
+            duration = item.get('duration', 0)  # 从item对象获取视频总时长
+            progress = item.get('progress', 0)  # 从item对象获取观看进度
+
             record = (
                 id_generator.get_id(),
                 item.get('title', ''),
@@ -270,10 +274,10 @@ def import_data_from_json(conn, table_name, file_path, last_import_time=0, batch
                 item.get('author_face', ''),
                 item.get('author_mid', 0),
                 view_at,
-                history.get('progress', 0),
+                progress,  # 使用从item对象获取的观看进度
                 item.get('badge', ''),
                 item.get('show_title', ''),
-                history.get('duration', 0),
+                duration,  # 使用从item对象获取的视频总时长
                 item.get('current', ''),
                 item.get('total', 0),
                 item.get('new_desc', ''),
