@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS {table} (
     kid INTEGER,
     tag_name TEXT,
     live_status INTEGER DEFAULT 0,
-    main_category TEXT
+    main_category TEXT,
+    remark TEXT DEFAULT ''
 );
 """
 
@@ -45,6 +46,6 @@ INSERT INTO {table} (
     id, title, long_title, cover, covers, uri, oid, epid, bvid, page, cid, part, 
     business, dt, videos, author_name, author_face, author_mid, view_at, progress, 
     badge, show_title, duration, current, total, new_desc, is_finish, is_fav, kid, 
-    tag_name, live_status, main_category
+    tag_name, live_status, main_category, remark
 ) VALUES ({placeholders})
 """

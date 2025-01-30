@@ -104,37 +104,38 @@ def create_table(conn, table_name):
     cursor.execute(f"""
     CREATE TABLE IF NOT EXISTS {table_name} (
         id INTEGER PRIMARY KEY,
-        title TEXT,
+        title TEXT NOT NULL,
         long_title TEXT,
         cover TEXT,
         covers TEXT,
         uri TEXT,
-        oid INTEGER,
-        epid INTEGER,
-        bvid TEXT,
-        page INTEGER,
+        oid INTEGER NOT NULL,
+        epid INTEGER DEFAULT 0,
+        bvid TEXT NOT NULL,
+        page INTEGER DEFAULT 1,
         cid INTEGER,
         part TEXT,
         business TEXT,
-        dt INTEGER,
-        videos INTEGER,
-        author_name TEXT,
+        dt INTEGER NOT NULL,
+        videos INTEGER DEFAULT 1,
+        author_name TEXT NOT NULL,
         author_face TEXT,
-        author_mid INTEGER,
-        view_at INTEGER,
-        progress INTEGER,
+        author_mid INTEGER NOT NULL,
+        view_at INTEGER NOT NULL,
+        progress INTEGER DEFAULT 0,
         badge TEXT,
         show_title TEXT,
-        duration INTEGER,
+        duration INTEGER NOT NULL,
         current TEXT,
-        total INTEGER,
+        total INTEGER DEFAULT 0,
         new_desc TEXT,
-        is_finish INTEGER,
-        is_fav INTEGER,
+        is_finish INTEGER DEFAULT 0,
+        is_fav INTEGER DEFAULT 0,
         kid INTEGER,
         tag_name TEXT,
-        live_status INTEGER,
-        main_category TEXT
+        live_status INTEGER DEFAULT 0,
+        main_category TEXT,
+        remark TEXT DEFAULT ''
     )
     """)
     
@@ -155,9 +156,9 @@ def batch_insert_data(conn, table_name, data_batch):
         id, title, long_title, cover, covers, uri, oid, epid, bvid, page, 
         cid, part, business, dt, videos, author_name, author_face, author_mid, 
         view_at, progress, badge, show_title, duration, current, total, 
-        new_desc, is_finish, is_fav, kid, tag_name, live_status, main_category
+        new_desc, is_finish, is_fav, kid, tag_name, live_status, main_category, remark
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     
     try:
@@ -286,7 +287,8 @@ def import_data_from_json(conn, table_name, file_path, last_import_time=0, batch
                 history.get('kid', 0),
                 tag_name,
                 item.get('live_status', 0),
-                main_category
+                main_category,
+                ''  # 默认的空备注
             )
             
             data_by_year[year].append(record)

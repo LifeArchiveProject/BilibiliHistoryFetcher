@@ -40,6 +40,7 @@ CREATE_TABLE_DEFAULT = """
         tag_name VARCHAR(100) COMMENT '子分区名 用于稿件视频和直播',
         live_status TINYINT(1) DEFAULT 0 COMMENT '直播状态 仅用于直播0未开播1已开播',
         main_category VARCHAR(100) COMMENT '主分区名称',
+        remark TEXT COMMENT '用户添加的备注信息',
         INDEX (author_mid) COMMENT '建立作者MID的索引，用于快速查询',
         INDEX (view_at) COMMENT '建立观看时间的索引'
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -52,13 +53,13 @@ INSERT_DATA = """
         id, title, long_title, cover, covers, uri, oid, epid, bvid, page, cid, part, 
         business, dt, videos, author_name, author_face, author_mid, view_at, progress, 
         badge, show_title, duration, current, total, new_desc, is_finish, is_fav, kid, 
-        tag_name, live_status, main_category
+        tag_name, live_status, main_category, remark
     ) VALUES (
         %(id)s, %(title)s, %(long_title)s, %(cover)s, %(covers)s, %(uri)s, %(oid)s, 
         %(epid)s, %(bvid)s, %(page)s, %(cid)s, %(part)s, %(business)s, %(dt)s, 
         %(videos)s, %(author_name)s, %(author_face)s, %(author_mid)s, %(view_at)s, 
         %(progress)s, %(badge)s, %(show_title)s, %(duration)s, %(current)s, %(total)s, 
         %(new_desc)s, %(is_finish)s, %(is_fav)s, %(kid)s, %(tag_name)s, %(live_status)s, 
-        %(main_category)s
+        %(main_category)s, %(remark)s
     )
 """

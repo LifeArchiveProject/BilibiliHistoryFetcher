@@ -1,9 +1,11 @@
 import json
 import sqlite3
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+import os
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
+from pydantic import BaseModel
 
 from scripts.utils import get_output_path, load_config
 
@@ -363,6 +365,281 @@ async def search_author(
 
     except sqlite3.Error as e:
         return {"status": "error", "message": f"数据库错误: {str(e)}"}
+    finally:
+        if conn:
+            conn.close()
+
+class UpdateRemarkRequest(BaseModel):
+    bvid: str
+    view_at: int
+    remark: str
+
+@router.post("/update-remark")
+async def update_video_remark(request: UpdateRemarkRequest):
+    """更新视频备注
+    
+    Args:
+        request: 包含bvid、view_at和remark的请求体
+        
+    Returns:
+        dict: 更新操作的结果
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 从时间戳获取年份
+        year = datetime.fromtimestamp(request.view_at).year
+        table_name = f"bilibili_history_{year}"
+        
+        # 检查表是否存在
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (table_name,))
+        
+        if not cursor.fetchone():
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 {year} 年的历史记录数据"
+            )
+        
+        # 更新备注
+        query = f"""
+            UPDATE {table_name}
+            SET remark = ?
+            WHERE bvid = ? AND view_at = ?
+        """
+        cursor.execute(query, (request.remark, request.bvid, request.view_at))
+        conn.commit()
+        
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="未找到指定的视频记录"
+            )
+        
+        return {
+            "status": "success",
+            "message": "备注更新成功",
+            "data": {
+                "bvid": request.bvid,
+                "view_at": request.view_at,
+                "remark": request.remark
+            }
+        }
+        
+    except sqlite3.Error as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"数据库操作失败: {str(e)}"
+        )
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/remark")
+async def get_video_remark(bvid: str, view_at: int):
+    """获取视频备注
+    
+    Args:
+        bvid: 视频的BV号
+        view_at: 观看时间戳
+        
+    Returns:
+        dict: 包含视频备注信息的响应
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 从时间戳获取年份
+        year = datetime.fromtimestamp(view_at).year
+        table_name = f"bilibili_history_{year}"
+        
+        # 检查表是否存在
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (table_name,))
+        
+        if not cursor.fetchone():
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 {year} 年的历史记录数据"
+            )
+        
+        # 查询备注
+        query = f"""
+            SELECT title, remark
+            FROM {table_name}
+            WHERE bvid = ? AND view_at = ?
+        """
+        cursor.execute(query, (bvid, view_at))
+        result = cursor.fetchone()
+        
+        if not result:
+            raise HTTPException(
+                status_code=404,
+                detail="未找到指定的视频记录"
+            )
+        
+        return {
+            "status": "success",
+            "data": {
+                "bvid": bvid,
+                "view_at": view_at,
+                "title": result[0],
+                "remark": result[1]
+            }
+        }
+        
+    except sqlite3.Error as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"数据库操作失败: {str(e)}"
+        )
+    finally:
+        if conn:
+            conn.close()
+
+@router.post("/reset-database")
+async def reset_database():
+    """重置数据库
+    
+    删除现有的数据库文件和last_import.json文件，用于重新导入数据
+    
+    Returns:
+        dict: 操作结果
+    """
+    try:
+        # 获取文件路径
+        db_path = get_output_path(config['db_file'])
+        last_import_path = get_output_path('last_import.json')
+        
+        # 删除数据库文件
+        if os.path.exists(db_path):
+            try:
+                os.remove(db_path)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"删除数据库文件失败: {str(e)}"
+                )
+        
+        # 删除last_import.json文件
+        if os.path.exists(last_import_path):
+            try:
+                os.remove(last_import_path)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"删除last_import.json文件失败: {str(e)}"
+                )
+        
+        return {
+            "status": "success",
+            "message": "数据库已重置",
+            "data": {
+                "deleted_files": [
+                    os.path.basename(db_path),
+                    os.path.basename(last_import_path)
+                ]
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"重置数据库失败: {str(e)}"
+        )
+
+@router.get("/remarks")
+async def get_all_remarks(
+    page: int = Query(1, description="当前页码"),
+    size: int = Query(10, description="每页记录数"),
+    sort_order: int = Query(0, description="排序顺序，0为降序，1为升序")
+):
+    """获取所有带有备注的视频记录
+    
+    Args:
+        page: 当前页码
+        size: 每页记录数
+        sort_order: 排序顺序，0为降序，1为升序
+        
+    Returns:
+        dict: 包含分页的备注记录列表
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 获取所有年份的表
+        years = get_available_years()
+        if not years:
+            return {
+                "status": "error",
+                "message": "未找到任何历史记录数据"
+            }
+        
+        # 构建UNION ALL查询，只查询有备注的记录
+        queries = []
+        for year in years:
+            table_name = f"bilibili_history_{year}"
+            queries.append(f"""
+                SELECT *
+                FROM {table_name}
+                WHERE remark != ''
+            """)
+        
+        # 组合所有查询，添加排序和分页
+        base_query = " UNION ALL ".join(queries)
+        count_query = f"SELECT COUNT(*) FROM ({base_query})"
+        
+        # 添加排序和分页
+        final_query = f"""
+            SELECT * FROM ({base_query})
+            ORDER BY view_at {('ASC' if sort_order == 1 else 'DESC')}
+            LIMIT ? OFFSET ?
+        """
+        
+        # 获取总记录数
+        cursor.execute(count_query)
+        total = cursor.fetchone()[0]
+        
+        # 执行分页查询
+        cursor.execute(final_query, [size, (page - 1) * size])
+        
+        # 获取列名
+        columns = [description[0] for description in cursor.description]
+        records = []
+        
+        # 构建记录
+        for row in cursor.fetchall():
+            record = dict(zip(columns, row))
+            # 解析JSON字符串
+            if 'covers' in record and record['covers']:
+                try:
+                    record['covers'] = json.loads(record['covers'])
+                except json.JSONDecodeError:
+                    record['covers'] = []
+            records.append(record)
+        
+        return {
+            "status": "success",
+            "data": {
+                "records": records,
+                "total": total,
+                "size": size,
+                "current": page
+            }
+        }
+        
+    except sqlite3.Error as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"数据库操作失败: {str(e)}"
+        )
     finally:
         if conn:
             conn.close() 
