@@ -1,6 +1,9 @@
 import json
 import os
-import sqlite3
+try:
+    import pysqlite3 as sqlite3
+except ImportError:
+    import sqlite3
 from datetime import datetime
 from typing import Optional
 
@@ -15,9 +18,55 @@ router = APIRouter()
 config = load_config()
 
 def get_db():
-    """获取数据库连接"""
+    """获取数据库连接，并确保数据库版本兼容性"""
     db_path = get_output_path(config['db_file'])
-    return sqlite3.connect(db_path)
+    
+    # 检查数据库文件是否存在
+    db_exists = os.path.exists(db_path)
+    
+    try:
+        # 连接数据库
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # 获取当前SQLite版本
+        cursor.execute('SELECT sqlite_version()')
+        current_version = cursor.fetchone()[0]
+        print(f"\n=== SQLite版本信息 ===")
+        print(f"当前SQLite版本: {current_version}")
+        
+        if not db_exists:
+            print("数据库文件不存在，将创建新数据库")
+            # 设置数据库兼容性级别
+            cursor.execute('PRAGMA legacy_file_format=ON')
+            cursor.execute('PRAGMA journal_mode=DELETE')
+            cursor.execute('PRAGMA synchronous=NORMAL')
+            cursor.execute('PRAGMA user_version=1')  # 设置用户版本
+            conn.commit()
+            print("已配置数据库兼容性设置")
+        else:
+            # 检查现有数据库的用户版本
+            cursor.execute('PRAGMA user_version')
+            user_version = cursor.fetchone()[0]
+            print(f"数据库用户版本: {user_version}")
+            
+            # 设置兼容性模式
+            cursor.execute('PRAGMA legacy_file_format=ON')
+            cursor.execute('PRAGMA journal_mode=DELETE')
+            cursor.execute('PRAGMA synchronous=NORMAL')
+            conn.commit()
+            
+        print("===================\n")
+        return conn
+        
+    except sqlite3.Error as e:
+        print(f"数据库连接错误: {str(e)}")
+        if 'conn' in locals() and conn:
+            conn.close()
+        raise HTTPException(
+            status_code=500,
+            detail=f"数据库连接失败: {str(e)}"
+        )
 
 def get_available_years():
     """获取数据库中所有可用的年份"""
@@ -343,25 +392,21 @@ async def search_history(
         
         # 构建每个年份的子查询
         sub_queries = []
-        for year in available_years:
-            table_name = f"bilibili_history_{year}"
-            sub_queries.append(f"SELECT * FROM {table_name}")
-        
-        # 合并所有年份的数据
-        base_query = f"WITH all_history AS ({' UNION ALL '.join(sub_queries)}) SELECT h.* FROM all_history h"
         base_params = []
         
         # 处理搜索关键词
+        field_map = {
+            "title": "title",
+            "author": "author_name",
+            "tag": "tag_name",
+            "remark": "remark"
+        }
+        
+        where_clause = ""
+        search_params = []
         if search:
             words = process_search_keyword(search)
             print(f"\n分词结果: {words}\n")
-            
-            field_map = {
-                "title": "h.title",
-                "author": "h.author_name",
-                "tag": "h.tag_name",
-                "remark": "h.remark"
-            }
             
             print("\n=== 开始构建查询条件 ===")
             
@@ -372,48 +417,34 @@ async def search_history(
                     print(f"\n处理字段: {field_name}")
                     condition, params = build_field_search_conditions(field, search, words, exact_match)
                     field_conditions.append(condition)
-                    base_params.extend(params)
-                    print(f"当前参数数量: {len(base_params)}")
+                    search_params.extend(params)
+                    print(f"当前参数数量: {len(search_params)}")
                 
                 if field_conditions:
-                    where_clause = "(" + " OR ".join(field_conditions) + ")"
-                    base_query += f" WHERE {where_clause}"
+                    where_clause = f"WHERE ({' OR '.join(field_conditions)})"
             else:
                 field = field_map.get(search_type)
                 if field:
                     condition, params = build_field_search_conditions(field, search, words, exact_match)
-                    base_query += f" WHERE {condition}"
-                    base_params.extend(params)
-            
-            print("\n=== 基础查询 ===")
-            print(f"SQL: {base_query}")
-            print(f"参数: {base_params}")
-            print(f"参数数量: {len(base_params)}")
-            print("================\n")
+                    where_clause = f"WHERE {condition}"
+                    search_params.extend(params)
         
-        # 构建最终查询
-        query = base_query
-        params = base_params.copy()  # 创建参数的副本
+        # 构建基础查询
+        for year in available_years:
+            table_name = f"bilibili_history_{year}"
+            sub_query = f"SELECT * FROM {table_name} {where_clause}"
+            sub_queries.append(sub_query)
+            # 为每个子查询添加一组参数
+            base_params.extend(search_params)
         
-        # 添加排序
-        if sort_by == "relevance" and search:
-            field = field_map.get(search_type, "h.title")
-            # 移除h.前缀，因为在子查询中已经使用了别名
-            field_name = field.split('.')[-1]
-            query = f"""
-                SELECT *, 
-                    CASE 
-                        WHEN {field_name} = ? THEN 100
-                        WHEN {field_name} LIKE ? THEN 50
-                        ELSE 10
-                    END as relevance 
-                FROM ({query})
-            """
-            params.extend([search, f"%{search}%"])
-            query += " ORDER BY relevance DESC"
-        else:
-            query += f" ORDER BY view_at {('ASC' if sortOrder == 1 else 'DESC')}"
-
+        base_query = f"{' UNION ALL '.join(sub_queries)}"
+        
+        print("\n=== 基础查询 ===")
+        print(f"SQL: {base_query}")
+        print(f"参数: {base_params}")
+        print(f"参数数量: {len(base_params)}")
+        print("================\n")
+        
         # 获取总记录数
         count_query = f"SELECT COUNT(*) FROM ({base_query})"
         print("\n=== 计数查询 ===")
@@ -423,7 +454,29 @@ async def search_history(
         
         cursor.execute(count_query, base_params)
         total = cursor.fetchone()[0]
-
+        
+        # 构建最终查询，添加排序和分页
+        params = base_params.copy()
+        
+        if sort_by == "relevance" and search:
+            field = field_map.get(search_type, "title")
+            query = f"""
+                SELECT *, 
+                    CASE 
+                        WHEN {field} = ? THEN 100
+                        WHEN {field} LIKE ? THEN 50
+                        ELSE 10
+                    END as relevance 
+                FROM ({base_query})
+                ORDER BY relevance DESC
+            """
+            params.extend([search, f"%{search}%"])
+        else:
+            query = f"""
+                SELECT * FROM ({base_query})
+                ORDER BY view_at {('ASC' if sortOrder == 1 else 'DESC')}
+            """
+        
         # 添加分页
         query += " LIMIT ? OFFSET ?"
         params.extend([size, (page - 1) * size])
@@ -466,7 +519,9 @@ async def search_history(
         }
 
     except sqlite3.Error as e:
-        return {"status": "error", "message": f"数据库错误: {str(e)}"}
+        error_msg = f"数据库错误: {str(e)}"
+        print(f"\n=== 数据库错误 ===\n{error_msg}\n=================\n")
+        return {"status": "error", "message": error_msg}
     finally:
         if conn:
             conn.close()
