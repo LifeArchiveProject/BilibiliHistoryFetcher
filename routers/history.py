@@ -68,8 +68,7 @@ async def get_history_page(
     main_category: Optional[str] = Query(None, description="主分区名称"),
     date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd")
 ):
-    """分页查询历史记录"""
-    # 打印接收到的参数
+    """分页查询历史记录，支持跨年份查询"""
     print("\n=== 接收到的请求参数 ===")
     print(f"页码(page): {page}")
     print(f"每页记录数(size): {size}")
@@ -91,73 +90,64 @@ async def get_history_page(
                 "message": "未找到任何历史记录数据"
             }
         
-        # 根据date_range参数决定使用哪个年份的表
-        target_year = available_years[0]  # 默认使用最新年份
-        if date_range:
-            try:
-                start_date = date_range.split('-')[0]
-                target_year = int(start_date[:4])  # 从日期范围中提取年份
-                
-                if target_year not in available_years:
-                    return {
-                        "status": "error",
-                        "message": f"未找到 {target_year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
-                    }
-            except (ValueError, IndexError):
-                return {"status": "error", "message": "日期格式无效，应为yyyyMMdd-yyyyMMdd"}
-            
-        table_name = f"bilibili_history_{target_year}"
-        query = f"SELECT * FROM {table_name} WHERE 1=1"
+        # 构建UNION ALL查询
+        queries = []
         params = []
-
-        # 打印SQL查询开始
-        print("=== SQL查询构建 ===")
-        print(f"基础查询: {query}")
-        print(f"使用数据表: {table_name}")
-
+        
         # 处理日期范围
+        start_timestamp = None
+        end_timestamp = None
         if date_range:
             try:
                 start_date, end_date = date_range.split('-')
                 start_timestamp = int(datetime.strptime(start_date, '%Y%m%d').timestamp())
                 end_timestamp = int(datetime.strptime(end_date, '%Y%m%d').timestamp()) + 86400
+            except ValueError:
+                return {"status": "error", "message": "日期格式无效，应为yyyyMMdd-yyyyMMdd"}
+        
+        # 为每个年份构建查询
+        for year in available_years:
+            table_name = f"bilibili_history_{year}"
+            query = f"SELECT * FROM {table_name} WHERE 1=1"
+            
+            # 添加日期范围条件
+            if start_timestamp is not None and end_timestamp is not None:
                 query += " AND view_at >= ? AND view_at < ?"
                 params.extend([start_timestamp, end_timestamp])
-                print(f"添加日期范围条件: {start_date} 到 {end_date}")
-            except ValueError:
-                print("日期格式错误")
-                return {"status": "error", "message": "日期格式无效，应为yyyyMMdd-yyyyMMdd"}
-
-        # 处理分类筛选
-        if main_category:
-            query += " AND main_category = ?"
-            params.append(main_category)
-            print(f"添加主分区筛选: {main_category}")
-        elif tag_name:
-            query += " AND tag_name = ?"
-            params.append(tag_name)
-            print(f"添加子分区筛选: {tag_name}")
-
-        # 添加排序
-        query += " ORDER BY view_at " + ("ASC" if sort_order == 1 else "DESC")
-        print(f"添加排序: {'升序' if sort_order == 1 else '降序'}")
-
+            
+            # 添加分类筛选
+            if main_category:
+                query += " AND main_category = ?"
+                params.append(main_category)
+            elif tag_name:
+                query += " AND tag_name = ?"
+                params.append(tag_name)
+                
+            queries.append(query)
+        
+        # 组合所有查询
+        base_query = " UNION ALL ".join(queries)
+        
         # 获取总记录数
-        count_query = f"SELECT COUNT(*) FROM ({query})"
+        count_query = f"SELECT COUNT(*) FROM ({base_query})"
         cursor.execute(count_query, params)
         total = cursor.fetchone()[0]
-        print(f"总记录数: {total}")
-
-        # 添加分页
-        query += " LIMIT ? OFFSET ?"
+        
+        # 添加排序和分页
+        final_query = f"""
+            SELECT * FROM ({base_query})
+            ORDER BY view_at {('ASC' if sort_order == 1 else 'DESC')}
+            LIMIT ? OFFSET ?
+        """
         params.extend([size, (page - 1) * size])
-        print(f"添加分页: 第{page}页，每页{size}条")
-        print(f"最终SQL: {query}")
+        
+        print("=== SQL查询构建 ===")
+        print(f"最终SQL: {final_query}")
         print(f"参数: {params}")
         print("==================\n")
-
+        
         # 执行查询
-        cursor.execute(query, params)
+        cursor.execute(final_query, params)
         columns = [description[0] for description in cursor.description]
         records = []
         
@@ -169,8 +159,7 @@ async def get_history_page(
                 except json.JSONDecodeError:
                     record['covers'] = []
             records.append(record)
-
-        # 打印响应结果
+            
         print("=== 响应结果 ===")
         print(f"返回记录数: {len(records)}")
         print(f"第一条记录: {records[0] if records else '无记录'}")
@@ -182,7 +171,8 @@ async def get_history_page(
                 "records": records,
                 "total": total,
                 "size": size,
-                "current": page
+                "current": page,
+                "available_years": available_years
             }
         }
 

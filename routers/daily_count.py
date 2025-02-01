@@ -1,8 +1,9 @@
-from typing import Optional
 import sqlite3
 from datetime import datetime
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+
 from scripts.utils import load_config, get_output_path
 
 router = APIRouter()
@@ -126,62 +127,82 @@ async def get_daily_count(
     date: str = Query(..., description="日期，格式为MMDD，例如0113表示1月13日"),
     year: Optional[int] = Query(None, description="年份，不传则使用当前年份")
 ):
-    """获取指定日期的视频观看数量统计
+    """获取指定日期的所有条目统计
     
     Args:
-        date: 日期，格式为MMDD，例如0113表示1月13日
+        date: 日期，格式为MMDD
         year: 年份，不传则使用当前年份
-    
-    Returns:
-        dict: 包含视频观看统计的数据
     """
     try:
-        # 验证日期格式
-        if not date.isdigit() or len(date) != 4:
-            raise HTTPException(status_code=400, detail="日期格式错误，应为MMDD格式，例如0113")
+        # 如果未指定年份，使用当前年份
+        if year is None:
+            year = datetime.now().year
             
-        month = int(date[:2])
-        day = int(date[2:])
-        if not (1 <= month <= 12 and 1 <= day <= 31):
-            raise HTTPException(status_code=400, detail="无效的日期")
-        
-        # 获取可用年份列表
-        available_years = get_available_years()
-        if not available_years:
+        # 构建完整日期
+        try:
+            month = int(date[:2])
+            day = int(date[2:])
+            target_date = datetime(year, month, day)
+        except ValueError:
             return {
                 "status": "error",
-                "message": "未找到任何历史记录数据"
+                "message": "日期格式无效，应为MMDD格式，例如0113表示1月13日"
             }
-        
-        # 如果未指定年份，使用最新的年份
-        target_year = year if year is not None else available_years[0]
-        
-        # 检查指定的年份是否可用
-        if year is not None and year not in available_years:
-            return {
-                "status": "error",
-                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
-            }
-        
-        table_name = f"bilibili_history_{target_year}"
+            
+        # 获取当日起止时间戳
+        start_timestamp = int(datetime(year, month, day).timestamp())
+        end_timestamp = start_timestamp + 86400  # 加一天的秒数
         
         conn = get_db()
         cursor = conn.cursor()
         
-        # 获取每日统计数据
-        daily_stats = get_daily_video_count(cursor, table_name, date)
+        # 检查年份表是否存在
+        table_name = f"bilibili_history_{year}"
+        cursor.execute("""
+            SELECT name FROM sqlite_master 
+            WHERE type='table' AND name=?
+        """, (table_name,))
+        
+        if not cursor.fetchone():
+            return {
+                "status": "error",
+                "message": f"未找到 {year} 年的历史记录数据"
+            }
+            
+        # 查询所有类型的条目数量
+        query = f"""
+            SELECT 
+                business,
+                COUNT(*) as count
+            FROM {table_name}
+            WHERE view_at >= ? AND view_at < ?
+            GROUP BY business
+        """
+        
+        cursor.execute(query, (start_timestamp, end_timestamp))
+        results = cursor.fetchall()
+        
+        # 计算总数并按类型分类
+        total_count = 0
+        type_counts = {}
+        
+        for business, count in results:
+            total_count += count
+            # 使用实际的business类型作为键，如果为空则使用'other'
+            type_key = business if business else 'other'
+            type_counts[type_key] = count
         
         return {
             "status": "success",
             "data": {
-                **daily_stats,
-                "year": target_year,
-                "available_years": available_years
+                "date": target_date.strftime("%Y-%m-%d"),
+                "total_count": total_count,
+                "type_counts": type_counts
             }
         }
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except sqlite3.Error as e:
+        return {"status": "error", "message": f"数据库错误: {str(e)}"}
     finally:
-        if 'conn' in locals() and conn:
+        if conn:
             conn.close() 
