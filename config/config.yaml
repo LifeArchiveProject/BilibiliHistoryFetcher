@@ -54,7 +54,7 @@ yutto:
     # 设置大会员严格校验
     vip_strict: false
     # 设置登录严格校验
-    login_strict: true
+    login_strict: false
   
   resource:
     # 不下载字幕
