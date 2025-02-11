@@ -25,48 +25,58 @@ from scripts.utils import get_output_path, load_config
 config = load_config()
 
 class ImageDownloader:
+    _instance = None
+    _initialized = False
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ImageDownloader, cls).__new__(cls)
+        return cls._instance
+    
     def __init__(self):
-        self.session = self._create_session()
-        self.download_status = self._load_download_status()
-        self.download_queue = Queue()
-        self.lock = threading.Lock()
-        self.status_lock = threading.Lock()  # 专门用于状态更新的锁
-        self.is_downloading = False  # 下载状态标志
-        
-        # 状态缓存
-        self.stats_cache = {}
-        self.stats_cache_time = 0
-        self.stats_cache_ttl = 1  # 缓存有效期(秒)
-        
-        # 总下载数量跟踪
-        self.total_covers_to_download = 0
-        self.total_avatars_to_download = 0
-        
-        # 确保目录存在
-        self.base_path = get_output_path('images')
-        self.covers_path = os.path.join(self.base_path, 'covers')
-        self.avatars_path = os.path.join(self.base_path, 'avatars')
-        self.orphaned_covers_path = os.path.join(self.base_path, 'orphaned_covers')
-        self.orphaned_avatars_path = os.path.join(self.base_path, 'orphaned_avatars')
-        
-        os.makedirs(self.covers_path, exist_ok=True)
-        os.makedirs(self.avatars_path, exist_ok=True)
-        os.makedirs(self.orphaned_covers_path, exist_ok=True)
-        os.makedirs(self.orphaned_avatars_path, exist_ok=True)
-        
-        # 用于记录重复的URL
-        self.avatar_url_map = {}
-        self.cover_url_map = {}
-        
-        # 加载已存在的图片信息
-        self._load_existing_images()
-        
-        print("初始化图片下载器完成")
-        print(f"图片保存基础路径: {self.base_path}")
-        print(f"封面保存路径: {self.covers_path}")
-        print(f"头像保存路径: {self.avatars_path}")
-        print(f"孤立封面保存路径: {self.orphaned_covers_path}")
-        print(f"孤立头像保存路径: {self.orphaned_avatars_path}")
+        if not self._initialized:
+            self._initialized = True
+            self.session = self._create_session()
+            self.download_status = self._load_download_status()
+            self.download_queue = Queue()
+            self.lock = threading.Lock()
+            self.status_lock = threading.Lock()  # 专门用于状态更新的锁
+            self.is_downloading = False  # 下载状态标志
+            
+            # 状态缓存
+            self.stats_cache = {}
+            self.stats_cache_time = 0
+            self.stats_cache_ttl = 1  # 缓存有效期(秒)
+            
+            # 总下载数量跟踪
+            self.total_covers_to_download = 0
+            self.total_avatars_to_download = 0
+            
+            # 确保目录存在
+            self.base_path = get_output_path('images')
+            self.covers_path = os.path.join(self.base_path, 'covers')
+            self.avatars_path = os.path.join(self.base_path, 'avatars')
+            self.orphaned_covers_path = os.path.join(self.base_path, 'orphaned_covers')
+            self.orphaned_avatars_path = os.path.join(self.base_path, 'orphaned_avatars')
+            
+            os.makedirs(self.covers_path, exist_ok=True)
+            os.makedirs(self.avatars_path, exist_ok=True)
+            os.makedirs(self.orphaned_covers_path, exist_ok=True)
+            os.makedirs(self.orphaned_avatars_path, exist_ok=True)
+            
+            # 用于记录重复的URL
+            self.avatar_url_map = {}
+            self.cover_url_map = {}
+            
+            # 加载已存在的图片信息
+            self._load_existing_images()
+            
+            print("初始化图片下载器完成")
+            print(f"图片保存基础路径: {self.base_path}")
+            print(f"封面保存路径: {self.covers_path}")
+            print(f"头像保存路径: {self.avatars_path}")
+            print(f"孤立封面保存路径: {self.orphaned_covers_path}")
+            print(f"孤立头像保存路径: {self.orphaned_avatars_path}")
     
     def _create_session(self) -> requests.Session:
         """创建请求会话，配置重试策略和请求头"""

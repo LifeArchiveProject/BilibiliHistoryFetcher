@@ -1,7 +1,10 @@
 from typing import Optional
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
+import os
 
 from scripts.image_downloader import ImageDownloader
+from scripts.utils import get_output_path
 
 router = APIRouter()
 downloader = ImageDownloader()
@@ -62,4 +65,65 @@ async def clear_images():
         return {
             "status": "error",
             "message": f"清空图片时发生错误: {str(e)}"
-        } 
+        }
+
+@router.get("/local/{image_type}/{file_hash}")
+async def get_local_image(image_type: str, file_hash: str):
+    """获取本地图片
+    
+    Args:
+        image_type: 图片类型 (covers 或 avatars)
+        file_hash: 图片文件的哈希值
+        
+    Returns:
+        FileResponse: 图片文件响应
+    """
+    print(f"\n=== 获取本地图片 ===")
+    print(f"图片类型: {image_type}")
+    print(f"文件哈希: {file_hash}")
+    
+    # 验证图片类型
+    if image_type not in ('covers', 'avatars'):
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的图片类型: {image_type}"
+        )
+    
+    try:
+        # 构建图片路径
+        base_path = get_output_path('images')
+        type_path = os.path.join(base_path, image_type)
+        sub_dir = file_hash[:2]  # 使用哈希的前两位作为子目录
+        img_dir = os.path.join(type_path, sub_dir)
+        
+        # 查找匹配的图片文件
+        if not os.path.exists(img_dir):
+            raise HTTPException(
+                status_code=404,
+                detail=f"图片不存在: {file_hash}"
+            )
+            
+        # 查找所有可能的图片文件扩展名
+        for ext in ('.jpg', '.jpeg', '.png', '.webp', '.gif'):
+            img_path = os.path.join(img_dir, f"{file_hash}{ext}")
+            if os.path.exists(img_path):
+                print(f"找到图片文件: {img_path}")
+                return FileResponse(
+                    img_path,
+                    media_type=f"image/{ext[1:]}" if ext != '.jpg' else "image/jpeg"
+                )
+        
+        # 如果没有找到任何匹配的文件
+        raise HTTPException(
+            status_code=404,
+            detail=f"图片不存在: {file_hash}"
+        )
+        
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        print(f"获取本地图片时出错: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取图片失败: {str(e)}"
+        ) 

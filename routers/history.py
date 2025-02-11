@@ -1,5 +1,6 @@
 import json
 import os
+import hashlib
 try:
     import pysqlite3 as sqlite3
 except ImportError:
@@ -13,9 +14,11 @@ from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 
 from scripts.utils import get_output_path, load_config
+from scripts.image_downloader import ImageDownloader
 
 router = APIRouter()
 config = load_config()
+downloader = ImageDownloader()
 
 def get_db():
     """获取数据库连接，并确保数据库版本兼容性"""
@@ -98,6 +101,67 @@ async def get_years():
         "data": years
     }
 
+def _process_image_url(url: str, image_type: str, use_local: bool) -> str:
+    """处理图片URL，根据需要返回本地路径或原始URL
+    
+    Args:
+        url: 原始图片URL
+        image_type: 图片类型 (covers 或 avatars)
+        use_local: 是否使用本地图片
+        
+    Returns:
+        str: 处理后的URL
+    """
+    print(f"\n处理图片URL: {url}")
+    print(f"图片类型: {image_type}")
+    print(f"使用本地图片: {use_local}")
+    
+    # 如果不使用本地图片或URL为空,直接返回原始URL
+    if not use_local or not url:
+        print(f"返回原始URL: {url}")
+        return url
+        
+    try:
+        # 计算URL的哈希值
+        file_hash = hashlib.md5(url.encode()).hexdigest()
+        print(f"URL哈希值: {file_hash}")
+        
+        # 检查图片类型是否有效
+        if image_type not in ('covers', 'avatars'):
+            print(f"无效的图片类型: {image_type}")
+            return url
+            
+        # 构建本地图片URL
+        base_url = "http://localhost:8899/images/local"
+        local_url = f"{base_url}/{image_type}/{file_hash}"
+        print(f"生成本地URL: {local_url}")
+        
+        return local_url
+        
+    except Exception as e:
+        print(f"处理图片URL时出错: {str(e)}")
+        return url
+
+def _process_record(record: dict, use_local: bool) -> dict:
+    """处理单条记录，转换图片URL
+    
+    Args:
+        record: 原始记录
+        use_local: 是否使用本地图片
+        
+    Returns:
+        dict: 处理后的记录
+    """
+    # 处理封面图片
+    if 'cover' in record and record['cover']:
+        record['cover'] = _process_image_url(record['cover'], 'covers', use_local)
+    
+    # 处理作者头像
+    if 'author_face' in record and record['author_face']:
+        record['author_face'] = _process_image_url(record['author_face'], 'avatars', use_local)
+            
+    return record
+
 @router.get("/all")
 async def get_history_page(
     page: int = Query(1, description="当前页码"),
@@ -105,7 +169,8 @@ async def get_history_page(
     sort_order: int = Query(0, description="排序顺序，0为降序，1为升序"),
     tag_name: Optional[str] = Query(None, description="视频子分区名称"),
     main_category: Optional[str] = Query(None, description="主分区名称"),
-    date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd")
+    date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd"),
+    use_local_images: bool = Query(False, description="是否使用本地图片")
 ):
     """分页查询历史记录，支持跨年份查询"""
     print("\n=== 接收到的请求参数 ===")
@@ -115,6 +180,7 @@ async def get_history_page(
     print(f"子分区名称(tag_name): {tag_name if tag_name else '无'}")
     print(f"主分区名称(main_category): {main_category if main_category else '无'}")
     print(f"日期范围(date_range): {date_range if date_range else '无'}")
+    print(f"是否使用本地图片(use_local_images): {use_local_images}")
     print("=====================\n")
 
     try:
@@ -192,11 +258,7 @@ async def get_history_page(
         
         for row in cursor.fetchall():
             record = dict(zip(columns, row))
-            if 'covers' in record and record['covers']:
-                try:
-                    record['covers'] = json.loads(record['covers'])
-                except json.JSONDecodeError:
-                    record['covers'] = []
+            record = _process_record(record, use_local_images)
             records.append(record)
             
         print("=== 响应结果 ===")
@@ -482,11 +544,7 @@ async def search_history(
         
         for row in cursor.fetchall():
             record = dict(zip(columns, row))
-            if 'covers' in record and record['covers']:
-                try:
-                    record['covers'] = json.loads(record['covers'])
-                except json.JSONDecodeError:
-                    record['covers'] = []
+            record = _process_record(record, False)
             records.append(record)
 
         return {
