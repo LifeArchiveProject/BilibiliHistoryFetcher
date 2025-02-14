@@ -159,6 +159,25 @@ def _process_record(record: dict, use_local: bool) -> dict:
     # 处理作者头像
     if 'author_face' in record and record['author_face']:
         record['author_face'] = _process_image_url(record['author_face'], 'avatars', use_local)
+    
+    # 解析 covers 字段的 JSON 字符串
+    if 'covers' in record and record['covers']:
+        try:
+            # 如果是字符串，尝试解析为 JSON
+            if isinstance(record['covers'], str):
+                covers = json.loads(record['covers'])
+                # 处理每个封面URL
+                if isinstance(covers, list):
+                    record['covers'] = [_process_image_url(url, 'covers', use_local) for url in covers]
+                else:
+                    record['covers'] = []
+            else:
+                record['covers'] = []
+        except json.JSONDecodeError:
+            print(f"解析 covers JSON 失败: {record['covers']}")
+            record['covers'] = []
+    else:
+        record['covers'] = []
             
     return record
 
@@ -733,72 +752,6 @@ async def update_video_remark(request: UpdateRemarkRequest):
         if conn:
             conn.close()
 
-@router.get("/remark")
-async def get_video_remark(bvid: str, view_at: int):
-    """获取视频备注
-    
-    Args:
-        bvid: 视频的BV号
-        view_at: 观看时间戳
-        
-    Returns:
-        dict: 包含视频备注信息的响应
-    """
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        
-        # 从时间戳获取年份
-        year = datetime.fromtimestamp(view_at).year
-        table_name = f"bilibili_history_{year}"
-        
-        # 检查表是否存在
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name=?
-        """, (table_name,))
-        
-        if not cursor.fetchone():
-            raise HTTPException(
-                status_code=404,
-                detail=f"未找到 {year} 年的历史记录数据"
-            )
-        
-        # 查询备注
-        query = f"""
-            SELECT title, remark, remark_time
-            FROM {table_name}
-            WHERE bvid = ? AND view_at = ?
-        """
-        cursor.execute(query, (bvid, view_at))
-        result = cursor.fetchone()
-        
-        if not result:
-            raise HTTPException(
-                status_code=404,
-                detail="未找到指定的视频记录"
-            )
-        
-        return {
-            "status": "success",
-            "data": {
-                "bvid": bvid,
-                "view_at": view_at,
-                "title": result[0],
-                "remark": result[1],
-                "remark_time": result[2]
-            }
-        }
-        
-    except sqlite3.Error as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"数据库操作失败: {str(e)}"
-        )
-    finally:
-        if conn:
-            conn.close()
-
 @router.post("/reset-database")
 async def reset_database():
     """重置数据库
@@ -937,6 +890,87 @@ async def get_sqlite_version():
             "status": "error",
             "message": f"获取版本信息失败: {str(e)}"
         }
+    finally:
+        if conn:
+            conn.close()
+
+class BatchRemarksRequest(BaseModel):
+    items: list[dict]
+
+@router.post("/batch-remarks")
+async def get_video_remarks(request: BatchRemarksRequest):
+    """批量获取视频备注
+    
+    Args:
+        request: 包含 items 列表的请求体，每个 item 包含 bvid 和 view_at
+        
+    Returns:
+        dict: 包含所有视频备注信息的响应
+    """
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 按年份分组记录
+        records_by_year = {}
+        for record in request.items:
+            year = datetime.fromtimestamp(record['view_at']).year
+            if year not in records_by_year:
+                records_by_year[year] = []
+            records_by_year[year].append((record['bvid'], record['view_at']))
+        
+        # 存储所有查询结果
+        results = {}
+        
+        # 处理每个年份的数据
+        for year, year_records in records_by_year.items():
+            table_name = f"bilibili_history_{year}"
+            
+            # 检查表是否存在
+            cursor.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name=?
+            """, (table_name,))
+            
+            if not cursor.fetchone():
+                print(f"未找到 {year} 年的历史记录数据")
+                continue
+            
+            # 构建查询条件
+            placeholders = ','.join(['(?,?)' for _ in year_records])
+            query = f"""
+                SELECT bvid, view_at, title, remark, remark_time
+                FROM {table_name}
+                WHERE (bvid, view_at) IN ({placeholders})
+            """
+            
+            # 展平参数列表
+            params = [param for record in year_records for param in record]
+            
+            # 执行查询
+            cursor.execute(query, params)
+            
+            # 处理查询结果
+            for row in cursor.fetchall():
+                bvid, view_at, title, remark, remark_time = row
+                results[f"{bvid}_{view_at}"] = {
+                    "bvid": bvid,
+                    "view_at": view_at,
+                    "title": title,
+                    "remark": remark,
+                    "remark_time": remark_time
+                }
+        
+        return {
+            "status": "success",
+            "data": results
+        }
+        
+    except sqlite3.Error as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"数据库操作失败: {str(e)}"
+        )
     finally:
         if conn:
             conn.close() 

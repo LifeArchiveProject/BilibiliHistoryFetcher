@@ -527,26 +527,35 @@ class ImageDownloader:
             conn = get_db()
             cursor = conn.cursor()
             
-            # 获取去重后的封面URL
+            # 获取去重后的封面URL，区分普通视频和专栏
             cursor.execute(f"""
-                SELECT DISTINCT cover
+                SELECT DISTINCT 
+                    CASE 
+                        WHEN badge = '专栏' AND covers IS NOT NULL AND covers != '' 
+                        THEN json_extract(covers, '$[0]')  -- 专栏使用covers数组的第一个元素
+                        ELSE cover  -- 其他情况使用cover字段
+                    END as cover_url,
+                    author_face
                 FROM bilibili_history_{year}
-                WHERE cover IS NOT NULL
-                  AND cover != ''
-                  AND (cover LIKE 'http://%' OR cover LIKE 'https://%')
+                WHERE (
+                    (badge != '专栏' AND cover IS NOT NULL AND cover != '' AND (cover LIKE 'http://%' OR cover LIKE 'https://%'))
+                    OR 
+                    (badge = '专栏' AND covers IS NOT NULL AND covers != '' AND json_valid(covers))
+                )
             """)
-            cover_urls = {row[0] for row in cursor.fetchall() if row[0]}
-            print(f"找到 {len(cover_urls)} 个不重复的封面URL")
             
-            # 获取去重后的头像URL
-            cursor.execute(f"""
-                SELECT DISTINCT author_face
-                FROM bilibili_history_{year}
-                WHERE author_face IS NOT NULL
-                  AND author_face != ''
-                  AND (author_face LIKE 'http://%' OR author_face LIKE 'https://%')
-            """)
-            avatar_urls = {row[0] for row in cursor.fetchall() if row[0]}
+            for row in cursor.fetchall():
+                cover_url, author_face = row
+                
+                # 处理封面URL
+                if cover_url and isinstance(cover_url, str) and (cover_url.startswith('http://') or cover_url.startswith('https://')):
+                    cover_urls.add(cover_url)
+                
+                # 处理头像URL
+                if author_face and isinstance(author_face, str) and (author_face.startswith('http://') or author_face.startswith('https://')):
+                    avatar_urls.add(author_face)
+            
+            print(f"找到 {len(cover_urls)} 个不重复的封面URL")
             print(f"找到 {len(avatar_urls)} 个不重复的头像URL")
             
             # 更新总下载数量
