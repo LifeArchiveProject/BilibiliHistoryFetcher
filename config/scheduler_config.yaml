@@ -1,55 +1,64 @@
 base_url: http://localhost:8899
-tasks:
-  fetch_history:
-    name: 获取B站历史记录
-    endpoint: /fetch/bili-history
-    method: GET
-    schedule:
-      type: daily
-      time: 00:00
-    requires: []
-    params: {}
-  import_data:
-    name: 导入数据到数据库
-    endpoint: /importSqlite/import_data_sqlite
-    method: POST
-    schedule:
-      type: chain
-    requires:
-    - fetch_history
-  analyze_data:
-    name: 分析历史数据
-    endpoint: /analysis/analyze
-    method: POST
-    schedule:
-      type: chain
-    requires:
-    - import_data
-  generate_heatmap:
-    name: 生成观看热力图
-    endpoint: /heatmap/generate_heatmap
-    method: POST
-    schedule:
-      type: chain
-    requires:
-    - analyze_data
-  send_daily_report:
-    name: 发送每日报告
-    endpoint: /log/send-email
-    method: POST
-    params:
-      subject: B站历史记录日报 - {current_time}
-      content: null
-      mode: simple
-    schedule:
-      type: chain
-    requires:
-    - generate_heatmap
+error_handling:
+  notify_on_failure: true
+  stop_on_failure: true
 scheduler:
   log_level: INFO
   retry:
-    max_attempts: 3
     delay: 60
-error_handling:
-  stop_on_failure: true
-  notify_on_failure: true
+    max_attempts: 3
+tasks:
+  # 1. 无依赖的基础任务
+  fetch_history:
+    endpoint: /fetch/bili-history
+    method: GET
+    name: 获取B站历史记录
+    params: {}
+    requires: []
+    schedule:
+      time: 00:00
+      type: daily
+
+  # 2. 依赖 fetch_history
+  import_data:
+    endpoint: /importSqlite/import_data_sqlite
+    method: POST
+    name: 导入数据到数据库
+    requires:
+    - fetch_history
+    schedule:
+      type: chain
+
+  # 3. 依赖 import_data
+  analyze_data:
+    endpoint: /analysis/analyze
+    method: POST
+    name: 分析历史数据
+    requires:
+    - import_data
+    schedule:
+      type: chain
+
+  # 4. 依赖 analyze_data
+  generate_heatmap:
+    endpoint: /heatmap/generate_heatmap
+    method: POST
+    name: 生成观看热力图
+    requires:
+    - analyze_data
+    schedule:
+      type: chain
+
+  # 5. 依赖 generate_heatmap
+  send_daily_report:
+    endpoint: /log/send-email
+    method: POST
+    name: 发送每日报告
+    params:
+      content: null
+      mode: simple
+      subject: B站历史记录日报 - {current_time}
+    requires:
+    - generate_heatmap
+    schedule:
+      type: chain

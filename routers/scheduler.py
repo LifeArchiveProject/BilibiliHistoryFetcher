@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 from typing import List, Dict, Optional, Any
 
 import yaml
@@ -9,6 +10,7 @@ from pydantic import BaseModel, Field
 from scripts.scheduler_db import SchedulerDB  # 导入数据库模块
 from scripts.scheduler_manager import SchedulerManager
 from scripts.utils import get_base_path
+import asyncio
 
 # 配置日志记录
 logger = logging.getLogger(__name__)
@@ -147,8 +149,47 @@ async def get_all_tasks(scheduler: SchedulerManager = Depends(get_scheduler),
         tasks = []
         all_db_tasks = {task['task_id']: task for task in db.get_all_task_status()}
         
+        # 构建任务依赖图（反向图）
+        task_graph = {}
         for task_id, task_config in scheduler.tasks.items():
-            # 获取任务状态信息
+            task_graph[task_id] = []
+        
+        # 构建反向依赖关系
+        for task_id, task_config in scheduler.tasks.items():
+            for required_task in task_config.get('requires', []):
+                if required_task in task_graph:
+                    task_graph[required_task].append(task_id)
+        
+        # 使用拓扑排序获取任务顺序
+        def topological_sort(graph):
+            # 计算入度
+            in_degree = {node: 0 for node in graph}
+            for node in graph:
+                for neighbor in graph[node]:
+                    in_degree[neighbor] = in_degree.get(neighbor, 0) + 1
+            
+            # 找出入度为0的节点
+            queue = [node for node in graph if in_degree[node] == 0]
+            result = []
+            
+            while queue:
+                node = queue.pop(0)
+                result.append(node)
+                
+                # 更新相邻节点的入度
+                for neighbor in graph[node]:
+                    in_degree[neighbor] -= 1
+                    if in_degree[neighbor] == 0:
+                        queue.append(neighbor)
+            
+            return result
+        
+        # 获取排序后的任务ID列表
+        sorted_task_ids = topological_sort(task_graph)
+        
+        # 按排序后的顺序构建任务列表
+        for task_id in sorted_task_ids:
+            task_config = scheduler.tasks[task_id]
             schedule_info = task_config.get('schedule', {})
             
             # 获取数据库中的任务状态
@@ -178,7 +219,7 @@ async def get_all_tasks(scheduler: SchedulerManager = Depends(get_scheduler),
                 "schedule_time": schedule_info.get('time') if schedule_info.get('type') == 'daily' else None,
                 "last_run": db_task.get('last_run_time', "未记录"),
                 "next_run": db_task.get('next_run_time', "未计算"),
-                "status": last_status,  # 使用处理后的status值
+                "status": last_status,
                 "depends_on": task_config.get('requires', []),
                 "enabled": bool(db_task.get('enabled', True)),
                 "success_rate": success_rate,
@@ -328,46 +369,69 @@ async def update_task(task_id: str, task_update: TaskUpdateRequest,
                      scheduler: SchedulerManager = Depends(get_scheduler)):
     """更新计划任务配置"""
     try:
+        print(f"\n=== 开始处理任务更新请求 ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"任务ID: {task_id}")
+        print(f"更新内容: {task_update}")
+        
         # 获取当前配置
         config_path = get_config_path()
+        print(f"配置文件路径: {config_path}")
+        
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         
         # 检查任务是否存在
         if task_id not in config['tasks']:
-            raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+            error_msg = f"任务 {task_id} 不存在"
+            print(f"错误: {error_msg}")
+            raise HTTPException(status_code=404, detail=error_msg)
         
         # 获取当前任务配置
         current_task = config['tasks'][task_id]
+        print(f"当前任务配置: {current_task}")
         
         # 更新任务配置
         if task_update.name is not None:
+            print(f"更新任务名称: {task_update.name}")
             current_task['name'] = task_update.name
         
         if task_update.endpoint is not None:
+            print(f"更新任务端点: {task_update.endpoint}")
             current_task['endpoint'] = task_update.endpoint
         
         if task_update.method is not None:
+            print(f"更新请求方法: {task_update.method}")
             current_task['method'] = task_update.method
         
         if task_update.params is not None:
+            print(f"更新请求参数: {task_update.params}")
             current_task['params'] = task_update.params
         
         if task_update.requires is not None:
+            print(f"更新依赖任务: {task_update.requires}")
             current_task['requires'] = task_update.requires
         
+        # 保存旧的调度配置用于比较
+        old_schedule = current_task.get('schedule', {}).copy()
+        schedule_updated = False
+        
         if task_update.schedule is not None:
+            print(f"更新调度配置: {task_update.schedule}")
             current_task['schedule']['type'] = task_update.schedule.type
             
             # 根据调度类型更新特定配置
             if task_update.schedule.type == "daily":
                 if task_update.schedule.time:
+                    print(f"更新每日执行时间: {task_update.schedule.time}")
                     current_task['schedule']['time'] = task_update.schedule.time
+                    schedule_updated = True
                 if 'delay' in current_task['schedule']:
                     del current_task['schedule']['delay']
             
             elif task_update.schedule.type == "once":
                 if task_update.schedule.delay is not None:
+                    print(f"更新延迟执行时间: {task_update.schedule.delay}秒")
                     current_task['schedule']['delay'] = task_update.schedule.delay
                 if 'time' in current_task['schedule']:
                     del current_task['schedule']['time']
@@ -379,10 +443,26 @@ async def update_task(task_id: str, task_update: TaskUpdateRequest,
                     del current_task['schedule']['delay']
         
         # 保存配置
+        print("保存更新后的配置...")
         save_config(config)
         
-        # 重新加载调度器配置
-        scheduler.load_config()
+        # 如果调度时间发生变化，使用专门的方法更新
+        if (schedule_updated and 
+            task_update.schedule.type == "daily" and 
+            task_update.schedule.time != old_schedule.get('time')):
+            print(f"检测到调度时间变更: {old_schedule.get('time')} -> {task_update.schedule.time}")
+            print("调用update_task_schedule_time更新调度时间...")
+            success = scheduler.update_task_schedule_time(task_id, task_update.schedule.time)
+            if not success:
+                error_msg = "更新任务调度时间失败"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=500, detail=error_msg)
+        else:
+            # 重新加载调度器配置
+            print("重新加载调度器配置...")
+            scheduler.load_config()
+        
+        print("任务更新成功")
         
         return {
             "status": "success",
@@ -392,8 +472,10 @@ async def update_task(task_id: str, task_update: TaskUpdateRequest,
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"更新任务失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"更新任务失败: {str(e)}")
+        error_msg = f"更新任务失败: {str(e)}"
+        print(f"错误: {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @router.delete("/tasks/{task_id}", summary="删除计划任务", response_model=TaskActionResponse)
 async def delete_task(task_id: str, 
@@ -443,13 +525,23 @@ async def delete_task(task_id: str,
 async def execute_task(task_id: str, scheduler: SchedulerManager = Depends(get_scheduler)):
     """立即执行指定的计划任务"""
     try:
-        if task_id not in scheduler.tasks:
-            raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
+        print(f"\n=== 开始执行任务 ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"任务ID: {task_id}")
         
-        # 异步执行任务链
-        # 这里使用异步任务，以便API能够立即返回，而不是等待任务完成
-        import asyncio
-        asyncio.create_task(scheduler.execute_task_chain(task_id))
+        if task_id not in scheduler.tasks:
+            error_msg = f"任务 {task_id} 不存在"
+            print(f"错误: {error_msg}")
+            raise HTTPException(status_code=404, detail=error_msg)
+        
+        print("创建后台任务...")
+        # 创建后台任务并等待其启动
+        task = asyncio.create_task(scheduler.execute_task_chain(task_id))
+        
+        # 等待一小段时间确保任务已经开始执行
+        await asyncio.sleep(0.1)
+        
+        print(f"任务已开始在后台执行")
         
         return {
             "status": "success",
@@ -459,8 +551,10 @@ async def execute_task(task_id: str, scheduler: SchedulerManager = Depends(get_s
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"执行任务失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"执行任务失败: {str(e)}")
+        error_msg = f"执行任务失败: {str(e)}"
+        print(f"错误: {error_msg}")
+        logger.error(error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @router.get("/history/task/{task_id}", summary="获取任务执行历史", response_model=TaskHistoryResponse)
 async def get_task_history(task_id: str, limit: int = 10, 
@@ -517,36 +611,33 @@ async def get_chain_executions(limit: int = 10, db: SchedulerDB = Depends(get_sc
         raise HTTPException(status_code=500, detail=f"获取任务链执行记录失败: {str(e)}")
 
 @router.post("/tasks/{task_id}/enable", summary="启用或禁用任务")
-async def enable_task(task_id: str, request: TaskEnableRequest, 
-                     scheduler: SchedulerManager = Depends(get_scheduler),
-                     db: SchedulerDB = Depends(get_scheduler_db)):
-    """启用或禁用特定任务"""
+async def enable_task(
+    task_id: str, 
+    request: TaskEnableRequest,
+    scheduler: SchedulerManager = Depends(get_scheduler)
+):
+    """启用或禁用任务"""
     try:
-        # 检查任务是否存在
         if task_id not in scheduler.tasks:
             raise HTTPException(status_code=404, detail=f"任务 {task_id} 不存在")
         
-        # 更新数据库中的启用状态
-        result = db.enable_task(task_id, request.enabled)
+        # 使用新方法更新任务启用状态并重新加载调度
+        success = scheduler.update_task_enabled_status(task_id, request.enabled)
         
-        if not result:
-            raise HTTPException(status_code=500, detail=f"更新任务状态失败")
+        if not success:
+            raise HTTPException(status_code=500, detail=f"更新任务 {task_id} 的启用状态失败")
         
-        # 可能需要重新调度任务（对于每日任务）
-        # 在此实现...
-        
-        status_text = "启用" if request.enabled else "禁用"
         return {
             "status": "success",
-            "message": f"成功{status_text}任务 {task_id}",
+            "message": f"成功{'启用' if request.enabled else '禁用'}任务 {task_id}",
             "task_id": task_id,
             "enabled": request.enabled
         }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"{'启用' if request.enabled else '禁用'}任务失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"{'启用' if request.enabled else '禁用'}任务失败: {str(e)}")
+        logger.error(f"更新任务启用状态失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"更新任务启用状态失败: {str(e)}")
 
 @router.post("/tasks/{task_id}/priority", summary="设置任务优先级")
 async def set_task_priority(task_id: str, request: TaskPriorityRequest, 

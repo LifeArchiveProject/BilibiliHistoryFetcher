@@ -38,8 +38,6 @@ class SchedulerManager:
             return
             
         self.app = app
-        config = load_config()
-        self.base_url = config['base_url']  # 直接使用配置文件中的base_url
         self.tasks = {}
         self.daily_tasks = {}
         self.task_chains = {}  # 通过依赖关系构建的任务链
@@ -49,10 +47,13 @@ class SchedulerManager:
         self.is_running = False
         self.log_capture = None
         self.current_log_file = None
+        # 移除默认值，确保配置必须从配置文件中读取
+        self.base_url = None
         
         # 初始化数据库
         self.db = SchedulerDB.get_instance()
         
+        # 加载配置（会设置self.base_url）
         self.load_config()
         self._initialized = True  # 标记为已初始化
 
@@ -102,8 +103,29 @@ class SchedulerManager:
                 
             with open(config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-                self.base_url = config.get('base_url', self.base_url)
+                
+                # 读取base_url，必须存在
+                if 'base_url' in config:
+                    self.base_url = config['base_url']
+                    print(f"从配置文件读取base_url: {self.base_url}")
+                else:
+                    raise KeyError(f"配置文件中缺少必要的'base_url'配置项，请检查配置文件: {config_path}")
+                
+                # 更新任务配置
+                old_tasks = self.tasks.copy() if hasattr(self, 'tasks') else {}
                 self.tasks = config.get('tasks', {})
+                
+                # 如果是重新加载配置，检查任务调度时间是否有变化
+                if old_tasks:
+                    for task_id, task in self.tasks.items():
+                        if task_id in old_tasks:
+                            old_task = old_tasks[task_id]
+                            # 检查调度时间是否变化
+                            if ('schedule' in task and 'schedule' in old_task and
+                                task['schedule'].get('type') == 'daily' and old_task['schedule'].get('type') == 'daily' and
+                                task['schedule'].get('time') != old_task['schedule'].get('time')):
+                                print(f"任务 {task_id} 的调度时间已变更: {old_task['schedule'].get('time')} -> {task['schedule'].get('time')}")
+                
             logging.info(f"成功加载调度配置")
             logging.info(f"已配置的任务: {list(self.tasks.keys())}")
             
@@ -113,6 +135,8 @@ class SchedulerManager:
                 schedule = task.get('schedule', {})
                 if schedule.get('type') == 'daily':
                     self.daily_tasks[task_id] = task
+                    # 打印每日任务的调度时间
+                    print(f"每日任务: {task_id}, 调度时间: {schedule.get('time')}")
             
             # 构建任务链
             self.task_chains = self._build_task_chains()
@@ -172,335 +196,72 @@ class SchedulerManager:
         
         return chain
 
-    async def execute_task(self, task_name: str) -> bool:
+    async def execute_task(self, task_id: str) -> bool:
         """执行单个任务"""
-        if task_name not in self.tasks:
-            print(f"未找到任务: {task_name}")
-            return False
-
-        task = self.tasks[task_name]
-        print(f"开始执行任务: {task_name}")
-        
-        # 记录任务开始执行
-        start_time = datetime.now()
-        start_time_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
-        triggered_by = "manual" if not hasattr(self, 'current_chain') else f"chain:{self.current_chain}"
-        
-        # 获取当前任务状态，用于更新统计数据
-        task_status = self.db.get_task_status(task_name) or {}
-        total_runs = task_status.get('total_runs', 0) + 1
-        success_runs = task_status.get('success_runs', 0)
-        fail_runs = task_status.get('fail_runs', 0)
+        print(f"\n=== 执行任务: {task_id} ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         try:
-            # 检查依赖任务是否都成功完成
-            for required_task in task.get('requires', []):
-                if not self.task_status.get(required_task):
-                    error_msg = f"依赖任务 {required_task} 未成功完成，无法执行 {task_name}"
-                    print(error_msg)
-                    
-                    # 更新任务状态
-                    fail_runs += 1
-                    self.db.update_task_status(task_name, {
-                        'last_run_time': start_time_str,
-                        'last_status': 'fail',
-                        'total_runs': total_runs,
-                        'fail_runs': fail_runs,
-                        'last_error': error_msg
-                    })
-                    
-                    # 记录执行失败
-                    self.db.record_task_execution(
-                        task_id=task_name, 
-                        start_time=start_time_str,
-                        end_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                        status="fail", 
-                        error_message=error_msg,
-                        triggered_by=triggered_by
-                    )
-                    return False
-
-            url = f"{self.base_url}{task['endpoint']}"
-            method = task.get('method', 'GET').upper()
-            params = task.get('params', {})
+            # 检查任务是否存在
+            if task_id not in self.tasks:
+                print(f"错误: 任务 {task_id} 不存在")
+                return False
             
-            print(f"请求: {method} {url}")
+            task = self.tasks[task_id]
+            print(f"开始执行任务: {task['name']}")
             
-            output_lines = []
-            output_lines.append(f"开始执行: {start_time_str}")
-            output_lines.append(f"请求: {method} {url}")
-            if params:
-                output_lines.append(f"参数: {params}")
+            # 创建后台任务并等待其完成
+            task_result = await self.execute_task_chain(task_id)
             
-            async with httpx.AsyncClient() as client:
-                if method == 'GET':
-                    response = await client.get(url, params=params)
-                else:
-                    response = await client.post(url, json=params)
-
-                output_lines.append(f"状态码: {response.status_code}")
-                
-                # 计算任务执行时间
-                end_time = datetime.now()
-                end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
-                duration = (end_time - start_time).total_seconds()
-                
-                # 更新平均执行时间
-                old_avg_duration = task_status.get('avg_duration', 0)
-                if old_avg_duration == 0:
-                    new_avg_duration = duration
-                else:
-                    # 加权平均，新的执行时间权重更高
-                    new_avg_duration = (old_avg_duration * 0.7) + (duration * 0.3)
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    output_lines.append(f"响应: {result}")
-                    
-                    if result.get("status") == "success":
-                        self.task_status[task_name] = True
-                        print(f"任务 {task_name} 执行成功")
-                        
-                        # 更新成功执行次数
-                        success_runs += 1
-                        
-                        # 更新任务状态
-                        status_update = {
-                            'last_run_time': start_time_str,
-                            'last_status': 'success',
-                            'total_runs': total_runs,
-                            'success_runs': success_runs,
-                            'avg_duration': new_avg_duration
-                        }
-                        
-                        # 对于每日任务，更新下次执行时间
-                        if 'schedule' in task and task['schedule'].get('type') == 'daily':
-                            time_str = task['schedule'].get('time')
-                            if time_str:
-                                next_run = self._calculate_next_run_time(time_str)
-                                if next_run:
-                                    status_update['next_run_time'] = next_run.strftime('%Y-%m-%d %H:%M:%S')
-                        
-                        # 更新任务状态
-                        self.db.update_task_status(task_name, status_update)
-                        
-                        # 记录执行成功
-                        self.db.record_task_execution(
-                            task_id=task_name,
-                            start_time=start_time_str,
-                            end_time=end_time_str,
-                            duration=duration,
-                            status="success",
-                            triggered_by=triggered_by,
-                            output="\n".join(output_lines)
-                        )
-                        return True
-                    else:
-                        error_msg = result.get('message', '未知错误')
-                        self.task_status[task_name] = False
-                        print(f"任务 {task_name} 执行失败: {error_msg}")
-                        
-                        # 更新失败执行次数
-                        fail_runs += 1
-                        
-                        # 更新任务状态
-                        self.db.update_task_status(task_name, {
-                            'last_run_time': start_time_str,
-                            'last_status': 'fail',
-                            'total_runs': total_runs,
-                            'fail_runs': fail_runs,
-                            'avg_duration': new_avg_duration,
-                            'last_error': error_msg
-                        })
-                        
-                        # 记录执行失败
-                        self.db.record_task_execution(
-                            task_id=task_name,
-                            start_time=start_time_str,
-                            end_time=end_time_str,
-                            duration=duration,
-                            status="fail",
-                            error_message=error_msg,
-                            triggered_by=triggered_by,
-                            output="\n".join(output_lines)
-                        )
-                        return False
-                else:
-                    error_msg = f"请求失败: {response.status_code} - {response.text}"
-                    self.task_status[task_name] = False
-                    print(f"任务 {task_name} 请求失败: {response.status_code}")
-                    
-                    # 更新失败执行次数
-                    fail_runs += 1
-                    
-                    # 更新任务状态
-                    self.db.update_task_status(task_name, {
-                        'last_run_time': start_time_str,
-                        'last_status': 'fail',
-                        'total_runs': total_runs,
-                        'fail_runs': fail_runs,
-                        'avg_duration': new_avg_duration,
-                        'last_error': error_msg
-                    })
-                    
-                    # 记录执行失败
-                    self.db.record_task_execution(
-                        task_id=task_name,
-                        start_time=start_time_str,
-                        end_time=end_time_str,
-                        duration=duration,
-                        status="fail",
-                        error_message=error_msg,
-                        triggered_by=triggered_by,
-                        output="\n".join(output_lines)
-                    )
-                    return False
-
+            print(f"任务 {task_id} 执行完成")
+            return task_result
+        
         except Exception as e:
-            error_msg = f"执行任务时发生错误: {str(e)}"
-            print(error_msg)
-            self.task_status[task_name] = False
-            
-            # 更新失败执行次数
-            fail_runs += 1
-            
-            # 计算任务执行时间
-            end_time = datetime.now()
-            end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
-            duration = (end_time - start_time).total_seconds()
-            
-            # 更新任务状态
-            self.db.update_task_status(task_name, {
-                'last_run_time': start_time_str,
-                'last_status': 'fail',
-                'total_runs': total_runs,
-                'fail_runs': fail_runs,
-                'last_error': error_msg
-            })
-            
-            # 记录执行错误
-            self.db.record_task_execution(
-                task_id=task_name,
-                start_time=start_time_str,
-                end_time=end_time_str,
-                duration=duration,
-                status="fail",
-                error_message=error_msg,
-                triggered_by=triggered_by
-            )
+            print(f"执行任务时发生错误: {str(e)}")
             return False
 
-    async def execute_task_chain(self, start_task: str):
+    async def execute_task_chain(self, task_id: str) -> bool:
         """执行任务链"""
-        # 生成今天的任务链唯一标识
-        chain_id = f"{start_task}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        chain_start_time = datetime.now()
-        chain_start_time_str = chain_start_time.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # 检查任务链是否已执行
-        if chain_id in self.chain_status:
-            return
-            
-        # 标记任务链开始执行
-        self.chain_status[chain_id] = True
-        self.current_chain = chain_id
-        
-        # 获取任务链
-        tasks_in_chain = []
-        if start_task in self.task_chains:
-            tasks_in_chain = self.task_chains[start_task]
-        else:
-            # 如果没有预定义的任务链，使用单任务作为任务链
-            tasks_in_chain = [start_task]
-            
-        print(f"开始执行任务链 {chain_id}, 任务列表: {tasks_in_chain}")
-        
-        # 记录任务链的执行开始
-        self.db.record_chain_execution_start(
-            chain_id=chain_id,
-            start_task_id=start_task,
-            start_time=chain_start_time_str
-        )
-        
-        # 执行任务链中的所有任务
-        tasks_executed = []
-        tasks_succeeded = []
-        tasks_failed = []
+        print(f"\n=== 执行任务链: {task_id} ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         try:
-            for task_id in tasks_in_chain:
-                tasks_executed.append(task_id)
-                success = await self.execute_task(task_id)
-                
-                if success:
-                    tasks_succeeded.append(task_id)
-                else:
-                    tasks_failed.append(task_id)
-                    # 如果任务失败，记录日志但继续执行其他任务
-                    logging.warning(f"任务链 {chain_id} 中的任务 {task_id} 执行失败")
-                
-            # 确定任务链的整体状态
-            chain_status = "success"
-            if len(tasks_failed) > 0:
-                chain_status = "partial_success" if len(tasks_succeeded) > 0 else "failed"
-                
-            # 记录任务链执行完成
-            chain_end_time = datetime.now()
-            chain_end_time_str = chain_end_time.strftime('%Y-%m-%d %H:%M:%S')
-            chain_duration = (chain_end_time - chain_start_time).total_seconds()
+            # 检查任务是否存在
+            if task_id not in self.tasks:
+                print(f"错误: 任务 {task_id} 不存在")
+                return False
             
-            self.db.record_chain_execution_end(
-                chain_id=chain_id,
-                end_time=chain_end_time_str,
-                status=chain_status,
-                tasks_executed=len(tasks_executed),
-                tasks_succeeded=len(tasks_succeeded),
-                tasks_failed=len(tasks_failed)
-            )
+            # 获取任务链
+            task_chain = self._build_chain_from_task(task_id)
+            if not task_chain:
+                print(f"错误: 无法构建任务 {task_id} 的执行链")
+                return False
             
-            print(f"任务链 {chain_id} 执行完成, 状态: {chain_status}, "
-                  f"执行: {len(tasks_executed)}, 成功: {len(tasks_succeeded)}, 失败: {len(tasks_failed)}")
+            print(f"任务链: {' -> '.join(task_chain)}")
             
-            return {
-                "status": chain_status,
-                "message": f"任务链执行完成",
-                "chain_id": chain_id,
-                "start_time": chain_start_time_str,
-                "end_time": chain_end_time_str,
-                "duration": chain_duration,
-                "tasks_executed": tasks_executed,
-                "tasks_succeeded": tasks_succeeded,
-                "tasks_failed": tasks_failed
-            }
+            # 依次执行任务链中的每个任务
+            for chain_task_id in task_chain:
+                print(f"\n执行链中的任务: {chain_task_id}")
+                
+                # 设置当前正在执行的任务链
+                self.current_chain = task_id
+                
+                # 执行任务并等待完成
+                success = await self._execute_single_task(chain_task_id)
+                
+                if not success:
+                    print(f"任务链执行失败: {chain_task_id} 执行失败")
+                    return False
+                
+            print(f"\n任务链执行完成: {task_id}")
+            return True
             
         except Exception as e:
-            error_message = f"执行任务链时发生错误: {str(e)}"
-            logging.error(error_message)
-            
-            # 记录任务链执行失败
-            chain_end_time = datetime.now()
-            chain_end_time_str = chain_end_time.strftime('%Y-%m-%d %H:%M:%S')
-            
-            self.db.record_chain_execution_end(
-                chain_id=chain_id,
-                end_time=chain_end_time_str,
-                status="error",
-                tasks_executed=len(tasks_executed),
-                tasks_succeeded=len(tasks_succeeded),
-                tasks_failed=len(tasks_failed)
-            )
-            
-            return {
-                "status": "error",
-                "message": error_message,
-                "chain_id": chain_id
-            }
-            
+            print(f"执行任务链时发生错误: {str(e)}")
+            return False
         finally:
-            # 任务链执行完成后，清理状态
-            self.task_status.clear()
-            if hasattr(self, 'current_chain'):
-                delattr(self, 'current_chain')
+            # 清除当前任务链标记
+            self.current_chain = None
 
     def find_next_task(self, current_task: str) -> Optional[str]:
         """查找下一个要执行的任务"""
@@ -511,13 +272,50 @@ class SchedulerManager:
 
     def schedule_tasks(self):
         """设置任务调度"""
-        print("开始设置任务调度...")
+        print("\n=== 开始设置任务调度 ===")
+        now = datetime.now()
+        print(f"当前时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 先清除所有现有的调度任务
+        schedule.clear()
+        schedule.jobs.clear()  # 确保完全清除所有任务
+        print("已清除所有现有调度任务")
+        
+        # 重置所有任务的状态
+        self.task_status.clear()
         print(f"当前已配置的任务: {list(self.tasks.keys())}")
         
+        # 创建一个同步的执行函数
+        def sync_execute_task(task_name):
+            print(f"\n=== 调度器触发任务执行 ===")
+            print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"任务名称: {task_name}")
+            
+            # 获取或创建事件循环
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # 在事件循环中执行异步任务
+            try:
+                # 创建任务并等待其完成
+                task = loop.create_task(self.execute_task_chain(task_name))
+                loop.run_until_complete(asyncio.gather(task))
+            except Exception as e:
+                print(f"执行任务时发生错误: {str(e)}")
+            finally:
+                # 如果我们创建了新的事件循环，需要关闭它
+                if loop and not loop.is_running():
+                    loop.close()
+        
         for task_name, task in self.tasks.items():
+            print(f"\n--- 处理任务: {task_name} ---")
             if 'schedule' in task:
                 schedule_info = task['schedule']
                 schedule_type = schedule_info['type']
+                print(f"调度类型: {schedule_type}")
                 
                 if schedule_type == 'daily':
                     # 获取任务的启用状态
@@ -525,19 +323,45 @@ class SchedulerManager:
                     is_enabled = True
                     if task_status and 'enabled' in task_status:
                         is_enabled = bool(task_status['enabled'])
+                    print(f"任务状态: {'启用' if is_enabled else '禁用'}")
                     
                     # 只调度启用的任务
                     if is_enabled:
                         time_str = schedule_info['time']
+                        print(f"调度时间: {time_str}")
+                        
                         # 计算下次执行时间
                         next_run = self._calculate_next_run_time(time_str)
                         if next_run:
-                            self.db.set_task_next_run(task_name, next_run)
+                            next_run_str = next_run.strftime('%Y-%m-%d %H:%M:%S')
+                            self.db.update_task_status(task_name, {'next_run_time': next_run_str})
+                            print(f"计算的下次执行时间: {next_run_str}")
+                            time_diff = (next_run - now).total_seconds() / 60
+                            print(f"距离现在: {time_diff:.1f} 分钟")
                             
-                        job = schedule.every().day.at(schedule_info['time']).do(
-                            lambda t=task_name: asyncio.create_task(self.execute_task_chain(t))
-                        )
-                        print(f"已设置每日任务: {task_name}, 时间: {schedule_info['time']}, 启用状态: {'启用' if is_enabled else '禁用'}")
+                            # 使用schedule库设置任务
+                            try:
+                                # 确保时间格式正确
+                                if ':' not in time_str or len(time_str.split(':')) != 2:
+                                    raise ValueError(f"时间格式不正确: {time_str}, 应为 HH:MM 格式")
+                                
+                                print(f"正在设置schedule任务...")
+                                # 使用同步函数包装异步执行
+                                job = schedule.every().day.at(time_str).do(
+                                    sync_execute_task, task_name
+                                )
+                                
+                                # 验证任务是否已正确设置
+                                if job in schedule.jobs:
+                                    print(f"任务已成功添加到调度队列")
+                                else:
+                                    print(f"警告: 任务可能未成功添加到调度队列")
+                            except Exception as e:
+                                print(f"设置任务调度失败: {str(e)}")
+                        else:
+                            print(f"警告: 无法计算下次执行时间")
+                    else:
+                        print(f"任务已禁用，跳过调度")
                 
                 elif schedule_type == 'once':
                     # 检查任务是否已执行过
@@ -549,52 +373,124 @@ class SchedulerManager:
                     delay = schedule_info.get('delay', 0)
                     print(f"设置一次性任务: {task_name}, {delay}秒后执行")
                     
-                    async def delayed_start(task_name):
+                    # 使用同步函数包装异步执行
+                    def delayed_sync_execute(task_name, delay):
+                        import time
                         print(f"等待{delay}秒后执行任务: {task_name}")
-                        await asyncio.sleep(delay)
-                        print(f"开始执行任务: {task_name}")
-                        await self.execute_task_chain(task_name)
+                        time.sleep(delay)
+                        sync_execute_task(task_name)
                     
-                    # 创建异步任务
-                    asyncio.create_task(delayed_start(task_name))
-    
-    def _calculate_next_run_time(self, time_str):
-        """计算下次执行时间"""
+                    # 在新线程中执行延迟任务
+                    import threading
+                    thread = threading.Thread(
+                        target=delayed_sync_execute,
+                        args=(task_name, delay)
+                    )
+                    thread.daemon = True
+                    thread.start()
+        
+        # 打印最终的调度状态
+        print("\n=== 当前调度状态 ===")
+        if not schedule.jobs:
+            print("没有已调度的任务")
+        else:
+            for job in schedule.jobs:
+                print(f"- {job}")
+                if hasattr(job, 'next_run') and job.next_run:
+                    time_diff = (job.next_run - now).total_seconds() / 60
+                    print(f"  下次执行时间: {job.next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"  距离现在: {time_diff:.1f} 分钟")
+        
+        print("\n=== 任务调度设置完成 ===")
+
+    def _calculate_next_run_time(self, time_str, allow_today=True):
+        """计算下次执行时间
+        
+        Args:
+            time_str: 时间字符串，格式为 HH:MM
+            allow_today: 是否允许将今天的时间作为下次执行时间
+        
+        Returns:
+            datetime: 下次执行时间
+        """
         try:
             # 解析时间字符串，格式为 HH:MM
             hour, minute = map(int, time_str.split(':'))
             
             # 获取当前时间
             now = datetime.now()
+            print(f"计算下次执行时间 - 当前时间: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"计算下次执行时间 - 目标时间: {time_str}")
             
             # 创建今天的执行时间
             today_run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            print(f"计算下次执行时间 - 今天的执行时间: {today_run_time.strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # 如果今天的执行时间已经过了，则使用明天的时间
-            if today_run_time <= now:
-                # 添加一天
+            # 计算时间差（分钟）
+            time_diff_minutes = (today_run_time - now).total_seconds() / 60
+            print(f"时间差: {time_diff_minutes:.1f} 分钟")
+            
+            # 如果目标时间在未来，直接使用今天的时间
+            if time_diff_minutes > 0:
+                next_run = today_run_time
+                print(f"目标时间在未来，使用今天的时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                # 如果目标时间已过，使用明天的时间
                 from datetime import timedelta
                 next_run = today_run_time + timedelta(days=1)
-            else:
-                next_run = today_run_time
-                
+                print(f"目标时间已过，使用明天的时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+            
             return next_run
         except Exception as e:
-            logging.error(f"计算下次执行时间失败: {str(e)}")
+            error_msg = f"计算下次执行时间失败: {str(e)}"
+            print(error_msg)
+            logging.error(error_msg, exc_info=True)
             return None
 
     async def run_scheduler(self):
         """运行调度器"""
-        self.is_running = True
+        print(f"\n=== 开始运行调度器 [{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ===")
+        
+        # 重新加载配置并设置任务
+        self.load_config()
+        schedule.clear()
+        schedule.jobs.clear()
+        self.task_status.clear()
+        self.chain_status.clear()
         self.schedule_tasks()
+        
+        # 打印初始调度状态
+        if schedule.jobs:
+            print("\n当前已调度的任务:")
+            for job in schedule.jobs:
+                if hasattr(job, 'next_run') and job.next_run:
+                    print(f"- {job}")
+                    print(f"  下次执行时间: {job.next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+        else:
+            print("\n没有已调度的任务")
+        
+        self.is_running = True
+        last_check_minute = -1
         
         while self.is_running:
             try:
-                schedule.run_pending()
+                now = datetime.now()
+                current_minute = now.minute
+                
+                # 每分钟检查一次任务状态
+                if current_minute != last_check_minute:
+                    last_check_minute = current_minute
+                    schedule.run_pending()
+                
+                # 等待1秒
                 await asyncio.sleep(1)
             except Exception as e:
-                logging.error(f"调度器运行错误: {e}")
-                await asyncio.sleep(60)
+                error_msg = f"调度器运行错误: {str(e)}"
+                print(f"\n!!! 调度器错误: {error_msg}")
+                logging.error(error_msg, exc_info=True)
+                
+                await asyncio.sleep(60)  # 出错后等待60秒再重试
+                self.reload_scheduler()
 
     def stop_scheduler(self):
         """停止调度器"""
@@ -603,6 +499,303 @@ class SchedulerManager:
         # 关闭数据库连接
         if hasattr(self, 'db'):
             self.db.close()
+
+    def reload_scheduler(self):
+        """重新加载调度配置"""
+        print("\n=== 重新加载调度配置 ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 清除所有现有的调度任务
+        schedule.clear()
+        schedule.jobs.clear()  # 确保完全清除所有任务
+        print("已清除所有现有调度任务")
+        
+        # 清除内部状态
+        self.task_status.clear()
+        self.chain_status.clear()
+        
+        # 重新加载配置
+        self.load_config()
+        
+        # 重新设置调度
+        self.schedule_tasks()
+        
+        # 打印当前的调度状态
+        print("\n当前调度状态:")
+        for job in schedule.jobs:
+            print(f"- {job}")
+            if hasattr(job, 'next_run') and job.next_run:
+                time_diff = (job.next_run - datetime.now()).total_seconds() / 60
+                print(f"  下次执行时间: {job.next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"  距离现在: {time_diff:.1f} 分钟")
+        
+        print("\n调度配置重新加载完成")
+        
+    def update_task_enabled_status(self, task_id: str, enabled: bool):
+        """更新任务的启用状态并重新加载调度配置"""
+        if task_id not in self.tasks:
+            return False
+            
+        # 更新数据库中的任务状态
+        self.db.update_task_status(task_id, {'enabled': 1 if enabled else 0})
+        
+        # 重新加载调度配置
+        self.reload_scheduler()
+        
+        return True
+        
+    def update_task_schedule_time(self, task_id: str, new_time: str):
+        """更新任务的调度时间"""
+        print(f"\n=== 更新任务调度时间 ===")
+        print(f"任务ID: {task_id}")
+        print(f"新的调度时间: {new_time}")
+        
+        try:
+            # 1. 检查任务是否存在
+            if task_id not in self.tasks:
+                print(f"错误: 任务 {task_id} 不存在")
+                return False
+            
+            # 2. 验证时间格式
+            try:
+                datetime.strptime(new_time, "%H:%M")
+            except ValueError:
+                print(f"错误: 无效的时间格式 {new_time}，应为 HH:MM")
+                return False
+            
+            # 3. 更新内存中的任务配置
+            print("更新内存中的任务配置...")
+            self.tasks[task_id]['schedule']['time'] = new_time
+            
+            # 4. 保存到配置文件
+            print("保存配置到文件...")
+            self._save_config_to_file()
+            
+            # 5. 停止当前调度器
+            print("停止当前调度器...")
+            old_running = self.is_running
+            self.is_running = False
+            schedule.clear()
+            schedule.jobs.clear()
+            
+            # 6. 重新加载配置
+            print("重新加载配置...")
+            self.load_config()
+            
+            # 7. 重新设置所有任务的调度
+            print("重新设置任务调度...")
+            self.schedule_tasks()
+            
+            # 8. 恢复调度器状态
+            print("恢复调度器状态...")
+            self.is_running = old_running
+            
+            # 9. 检查新任务是否已正确设置
+            print("\n=== 检查新的调度设置 ===")
+            found = False
+            now = datetime.now()
+            for job in schedule.jobs:
+                if task_id in str(job):
+                    found = True
+                    next_run = job.next_run
+                    time_diff = (next_run - now).total_seconds() / 60
+                    print(f"找到任务: {job}")
+                    print(f"下次执行时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                    print(f"距离现在: {time_diff:.1f} 分钟")
+            
+            if not found:
+                print(f"警告: 未找到任务 {task_id} 的新调度设置")
+                return False
+            
+            print("\n任务调度时间更新成功")
+            return True
+            
+        except Exception as e:
+            print(f"更新任务调度时间时发生错误: {str(e)}")
+            return False
+        
+    def _save_config_to_file(self):
+        """保存当前配置到文件"""
+        try:
+            # 使用与加载相同的路径逻辑
+            base_path = get_base_path()
+            if getattr(sys, 'frozen', False):
+                config_path = os.path.join(base_path, 'config', 'scheduler_config.yaml')
+            else:
+                config_path = os.path.join('config', 'scheduler_config.yaml')
+                
+            # 如果配置文件不存在，尝试其他可能的位置
+            if not os.path.exists(config_path):
+                alternative_paths = [
+                    os.path.join(os.path.dirname(sys.executable), 'config', 'scheduler_config.yaml'),
+                    os.path.join(os.getcwd(), 'config', 'scheduler_config.yaml'),
+                    os.path.join(base_path, '_internal', 'config', 'scheduler_config.yaml'),
+                    os.path.join(os.path.dirname(base_path), 'config', 'scheduler_config.yaml')
+                ]
+                for alt_path in alternative_paths:
+                    if os.path.exists(alt_path):
+                        config_path = alt_path
+                        break
+            
+            if not os.path.exists(config_path):
+                raise FileNotFoundError(f"找不到配置文件: {config_path}")
+                
+            # 先读取现有配置，以保留其他设置
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                
+            # 更新任务配置
+            config['tasks'] = self.tasks
+            
+            # 写回文件
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+                
+            print(f"配置已保存到: {config_path}")
+            return True
+        except Exception as e:
+            logging.error(f"保存配置文件失败: {str(e)}")
+            raise
+
+    def sync_execute_task(self, task_name):
+        """同步执行任务的包装函数"""
+        print(f"\n=== 同步执行任务: {task_name} ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        try:
+            # 获取或创建事件循环
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # 在事件循环中执行任务
+            try:
+                # 创建任务并等待其完成
+                task = asyncio.ensure_future(self.execute_task_chain(task_name), loop=loop)
+                loop.run_until_complete(task)
+                return task.result()
+            finally:
+                # 如果我们创建了新的事件循环，需要关闭它
+                if loop and not loop.is_running():
+                    loop.close()
+        except Exception as e:
+            print(f"执行任务时发生错误: {str(e)}")
+            return False
+
+    async def _execute_single_task(self, task_id: str) -> bool:
+        """执行单个任务的内部方法"""
+        print(f"\n=== 执行单个任务: {task_id} ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        try:
+            # 检查任务是否存在
+            if task_id not in self.tasks:
+                print(f"错误: 任务 {task_id} 不存在")
+                return False
+            
+            # 检查任务状态
+            task_status = self.db.get_task_status(task_id) or {}
+            if not task_status.get('enabled', True):
+                print(f"任务 {task_id} 已禁用，跳过执行")
+                return False
+            
+            task = self.tasks[task_id]
+            print(f"任务配置: {task}")
+            
+            # 记录任务开始执行
+            start_time = datetime.now()
+            start_time_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+            triggered_by = "manual" if not hasattr(self, 'current_chain') else f"chain:{self.current_chain}"
+            
+            url = f"{self.base_url}{task['endpoint']}"
+            method = task.get('method', 'GET').upper()
+            params = task.get('params', {})
+            
+            print(f"准备发送请求:")
+            print(f"- URL: {url}")
+            print(f"- 方法: {method}")
+            print(f"- 参数: {params}")
+            
+            # 设置超时时间
+            timeout = task.get('timeout', 300)
+            
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                if method == 'GET':
+                    response = await client.get(url, params=params)
+                else:
+                    response = await client.post(url, json=params)
+                    
+                end_time = datetime.now()
+                end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+                duration = (end_time - start_time).total_seconds()
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if result.get("status") == "success":
+                        print(f"任务 {task_id} 执行成功")
+                        self.task_status[task_id] = True
+                        # 记录成功的执行历史
+                        self.db.record_task_execution(
+                            task_id=task_id,
+                            start_time=start_time_str,
+                            end_time=end_time_str,
+                            duration=duration,
+                            status="success",
+                            triggered_by=triggered_by,
+                            output=str(result)
+                        )
+                        return True
+                    else:
+                        error_msg = result.get('message', '未知错误')
+                        print(f"任务 {task_id} 执行失败: {error_msg}")
+                        self.task_status[task_id] = False
+                        # 记录失败的执行历史
+                        self.db.record_task_execution(
+                            task_id=task_id,
+                            start_time=start_time_str,
+                            end_time=end_time_str,
+                            duration=duration,
+                            status="fail",
+                            error_message=error_msg,
+                            triggered_by=triggered_by
+                        )
+                        return False
+                else:
+                    error_msg = f"请求失败: {response.status_code} - {response.text}"
+                    print(f"任务 {task_id} 请求失败: {response.status_code}")
+                    self.task_status[task_id] = False
+                    # 记录请求失败的执行历史
+                    self.db.record_task_execution(
+                        task_id=task_id,
+                        start_time=start_time_str,
+                        end_time=end_time_str,
+                        duration=duration,
+                        status="fail",
+                        error_message=error_msg,
+                        triggered_by=triggered_by
+                    )
+                    return False
+                
+        except Exception as e:
+            end_time = datetime.now()
+            end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+            duration = (end_time - start_time).total_seconds()
+            error_msg = str(e)
+            print(f"执行任务时发生错误: {error_msg}")
+            self.task_status[task_id] = False
+            # 记录异常的执行历史
+            self.db.record_task_execution(
+                task_id=task_id,
+                start_time=start_time_str,
+                end_time=end_time_str,
+                duration=duration,
+                status="fail",
+                error_message=error_msg,
+                triggered_by=triggered_by
+            )
+            return False
 
 async def send_error_notification(error_message):
     """发送错误通知邮件"""
