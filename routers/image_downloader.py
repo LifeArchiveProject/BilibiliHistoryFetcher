@@ -16,7 +16,7 @@ def get_history_db():
     db_path = get_output_path('bilibili_history.db')
     return sqlite3.connect(db_path)
 
-@router.post("/start")
+@router.post("/start", summary="开始下载图片")
 async def start_download(
     background_tasks: BackgroundTasks,
     year: Optional[int] = None
@@ -34,7 +34,7 @@ async def start_download(
         "message": f"开始下载{'所有年份' if year is None else f'{year}年'}的图片"
     }
 
-@router.post("/stop")
+@router.post("/stop", summary="停止下载图片")
 async def stop_download():
     """停止当前下载任务
     
@@ -50,7 +50,7 @@ async def stop_download():
             "message": f"停止下载失败: {str(e)}"
         }
 
-@router.get("/status")
+@router.get("/status", summary="获取下载状态")
 async def get_status():
     """获取下载状态"""
     stats = downloader.get_download_stats()
@@ -60,7 +60,7 @@ async def get_status():
         "data": stats
     }
 
-@router.post("/clear")
+@router.post("/clear", summary="清空所有图片")
 async def clear_images():
     """清空所有图片和下载状态"""
     try:
@@ -90,7 +90,7 @@ async def clear_images():
             "message": f"清空图片时发生错误: {str(e)}"
         }
 
-@router.get("/local/{image_type}/{file_hash}")
+@router.get("/local/{image_type}/{file_hash}", summary="获取本地图片")
 async def get_local_image(image_type: str, file_hash: str):
     """获取本地图片
     

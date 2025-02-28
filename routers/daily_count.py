@@ -122,7 +122,7 @@ def get_daily_video_count(cursor, table_name: str, date: str) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"日期格式错误: {str(e)}")
 
-@router.get("/daily-count")
+@router.get("/daily-count", summary="获取指定日期的观看记录统计")
 async def get_daily_count(
     date: str = Query(..., description="日期，格式为MMDD，例如0113表示1月13日"),
     year: Optional[int] = Query(None, description="年份，不传则使用当前年份")

@@ -34,7 +34,7 @@ def ensure_table_exists():
         if conn:
             conn.close()
 
-@router.post("/init")
+@router.post("/init", summary="初始化视频分类数据")
 async def initialize_categories():
     """初始化视频分类数据"""
     try:
@@ -49,7 +49,7 @@ async def initialize_categories():
             "message": f"初始化失败: {str(e)}"
         }
 
-@router.get("/categories")
+@router.get("/categories", summary="获取所有分类信息")
 async def get_categories():
     """获取所有分类信息"""
     try:
@@ -106,7 +106,7 @@ async def get_categories():
         if conn:
             conn.close()
 
-@router.get("/main-categories")
+@router.get("/main-categories", summary="获取所有主分类")
 async def get_main_categories():
     """获取所有主分类"""
     try:
@@ -140,7 +140,7 @@ async def get_main_categories():
         if conn:
             conn.close()
 
-@router.get("/sub-categories/{main_category}")
+@router.get("/sub-categories/{main_category}", summary="获取指定主分类下的所有子分类")
 async def get_sub_categories(main_category: str):
     """获取指定主分类下的所有子分类"""
     try:

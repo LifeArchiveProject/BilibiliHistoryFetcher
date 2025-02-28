@@ -9,7 +9,7 @@ from scripts.utils import get_logs_path
 
 router = APIRouter()
 
-@router.post("/send-email")
+@router.post("/send-email", summary="发送日志邮件")
 async def send_log_email(
     subject: str = Body(..., description="邮件主题"),
     content: Optional[str] = Body(None, description="邮件内容，如果为None则发送当天的日志内容"),

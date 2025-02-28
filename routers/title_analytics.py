@@ -7,12 +7,10 @@ from typing import Dict, List, Tuple, Optional
 import jieba
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query
-from sklearn.cluster import KMeans
-from sklearn.feature_extraction.text import TfidfVectorizer
 from snownlp import SnowNLP
 
 from scripts.utils import load_config, get_output_path
-from .title_pattern_discovery import discover_title_patterns, discover_interaction_patterns
+from .title_pattern_discovery import discover_interaction_patterns
 
 router = APIRouter()
 config = load_config()
@@ -438,7 +436,7 @@ def get_available_years():
         if conn:
             conn.close()
 
-@router.get("/")
+@router.get("/", summary="获取标题分析")
 async def get_title_analytics(
     year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
     use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")

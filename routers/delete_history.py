@@ -1,11 +1,12 @@
-from fastapi import APIRouter, HTTPException
-from typing import List
-import sqlite3
 import json
-import os
-from scripts.utils import load_config, get_output_path
-from pydantic import BaseModel
+import sqlite3
 from datetime import datetime
+from typing import List
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from scripts.utils import load_config, get_output_path
 
 router = APIRouter()
 config = load_config()
@@ -31,7 +32,7 @@ def update_last_import_time(timestamp: int):
     with open(record_file, 'w', encoding='utf-8') as f:
         json.dump(record, f, ensure_ascii=False, indent=4)
 
-@router.delete("/batch-delete")
+@router.delete("/batch-delete", summary="批量删除历史记录")
 async def batch_delete_history(items: List[DeleteHistoryItem]):
     """批量删除历史记录
     

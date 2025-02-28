@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Query, HTTPException
-from typing import Optional, Dict, List
-from datetime import datetime
 import sqlite3
 from collections import defaultdict
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Query, HTTPException
 
 from scripts.utils import load_config, get_output_path
 
@@ -862,7 +863,7 @@ def get_available_years():
         if conn:
             conn.close()
 
-@router.get("/")
+@router.get("/", summary="获取观看行为分析")
 async def get_viewing_analytics(
     year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
     use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")

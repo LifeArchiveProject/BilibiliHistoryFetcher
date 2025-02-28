@@ -86,7 +86,7 @@ def get_available_years():
         if conn:
             conn.close()
 
-@router.get("/available-years")
+@router.get("/available-years", summary="获取可用的年份列表")
 async def get_years():
     """获取所有可用的年份列表"""
     years = get_available_years()
@@ -181,7 +181,7 @@ def _process_record(record: dict, use_local: bool) -> dict:
             
     return record
 
-@router.get("/all")
+@router.get("/all", summary="分页查询历史记录")
 async def get_history_page(
     page: int = Query(1, description="当前页码"),
     size: int = Query(10, description="每页记录数"),
@@ -430,7 +430,7 @@ def build_field_search_conditions(field: str, search: str, words: list, exact_ma
     print("===================")
     return condition, params
 
-@router.get("/search")
+@router.get("/search", summary="搜索历史记录")
 async def search_history(
     page: int = Query(1, description="当前页码"),
     size: int = Query(30, description="每页记录数"),
@@ -591,7 +591,7 @@ async def search_history(
         if conn:
             conn.close()
 
-@router.get("/remarks")
+@router.get("/remarks", summary="获取所有备注")
 async def get_all_remarks(
     page: int = Query(1, description="当前页码"),
     size: int = Query(10, description="每页记录数"),
@@ -686,7 +686,7 @@ class UpdateRemarkRequest(BaseModel):
     view_at: int
     remark: str
 
-@router.post("/update-remark")
+@router.post("/update-remark", summary="更新视频备注")
 async def update_video_remark(request: UpdateRemarkRequest):
     """更新视频备注
     
@@ -752,7 +752,7 @@ async def update_video_remark(request: UpdateRemarkRequest):
         if conn:
             conn.close()
 
-@router.post("/reset-database")
+@router.post("/reset-database", summary="重置数据库")
 async def reset_database():
     """重置数据库
     
@@ -803,7 +803,7 @@ async def reset_database():
             detail=f"重置数据库失败: {str(e)}"
         )
 
-@router.get("/sqlite-version")
+@router.get("/sqlite-version", summary="获取SQLite版本")
 async def get_sqlite_version():
     """获取 SQLite 版本信息"""
     try:
@@ -897,7 +897,7 @@ async def get_sqlite_version():
 class BatchRemarksRequest(BaseModel):
     items: list[dict]
 
-@router.post("/batch-remarks")
+@router.post("/batch-remarks", summary="批量获取视频备注")
 async def get_video_remarks(request: BatchRemarksRequest):
     """批量获取视频备注
     

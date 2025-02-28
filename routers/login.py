@@ -59,7 +59,7 @@ def save_cookies(cookies):
             detail=f"保存cookies失败: {str(e)}"
         )
 
-@router.get("/qrcode/generate")
+@router.get("/qrcode/generate", summary="生成B站登录二维码")
 async def generate_qrcode():
     """生成二维码登录的URL和密钥"""
     try:
@@ -146,7 +146,7 @@ async def generate_qrcode():
             detail=f"生成二维码失败: {str(e)}"
         )
 
-@router.get("/qrcode/image")
+@router.get("/qrcode/image", summary="获取登录二维码图片")
 async def get_qrcode_image():
     """获取生成的二维码图片"""
     try:
@@ -175,7 +175,7 @@ async def get_qrcode_image():
             detail=f"获取二维码图片失败: {str(e)}"
         )
 
-@router.get("/qrcode/poll")
+@router.get("/qrcode/poll", summary="轮询二维码扫描状态")
 async def poll_scan_status(qrcode_key: str):
     """轮询扫码状态"""
     try:
@@ -273,7 +273,7 @@ async def poll_scan_status(qrcode_key: str):
             detail=f"轮询扫码状态失败: {str(e)}"
         )
 
-@router.post("/logout")
+@router.post("/logout", summary="退出登录")
 async def logout():
     """退出登录，清空SESSDATA"""
     try:
@@ -323,7 +323,7 @@ async def logout():
             detail=f"退出登录失败: {str(e)}"
         )
 
-@router.get("/check")
+@router.get("/check", summary="检查登录状态")
 async def check_login_status():
     """检查当前登录状态"""
     try:

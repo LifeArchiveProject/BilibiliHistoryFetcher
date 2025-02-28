@@ -37,7 +37,7 @@ def get_headers():
     return headers
 
 
-@router.get("/bili-history")
+@router.get("/bili-history", summary="获取B站历史记录")
 async def get_bili_history(output_dir: Optional[str] = "history_by_date"):
     """获取B站历史记录"""
     try:
@@ -54,7 +54,7 @@ async def get_bili_history(output_dir: Optional[str] = "history_by_date"):
         }
 
 
-@router.get("/bili-history-realtime", response_model=ResponseModel)
+@router.get("/bili-history-realtime", summary="实时获取B站历史记录", response_model=ResponseModel)
 async def get_bili_history_realtime():
     """实时获取B站历史记录"""
     try:
