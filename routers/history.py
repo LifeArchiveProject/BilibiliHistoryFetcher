@@ -112,13 +112,9 @@ def _process_image_url(url: str, image_type: str, use_local: bool) -> str:
     Returns:
         str: 处理后的URL
     """
-    print(f"\n处理图片URL: {url}")
-    print(f"图片类型: {image_type}")
-    print(f"使用本地图片: {use_local}")
     
     # 如果不使用本地图片或URL为空,直接返回原始URL
     if not use_local or not url:
-        print(f"返回原始URL: {url}")
         return url
         
     try:

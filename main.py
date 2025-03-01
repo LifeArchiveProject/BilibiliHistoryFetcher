@@ -26,7 +26,8 @@ from routers import (
     login,
     delete_history,
     image_downloader,
-    scheduler
+    scheduler,
+    video_summary
 )
 from scripts.scheduler_manager import SchedulerManager
 from scripts.scheduler_db_enhanced import EnhancedSchedulerDB
@@ -248,6 +249,7 @@ app.include_router(daily_count.router, prefix="/daily", tags=["每日观看统�
 app.include_router(delete_history.router, prefix="/delete", tags=["删除历史记录"])
 app.include_router(image_downloader.router, prefix="/images", tags=["图片下载管理"])
 app.include_router(scheduler.router, prefix="/scheduler", tags=["计划任务管理"])
+app.include_router(video_summary.router, prefix="/summary", tags=["视频摘要"])
 
 # 入口点，启动应用
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ class DownloadRequest(BaseModel):
     url: str
     sessdata: Optional[str] = Field(None, description="用户的 SESSDATA")
     download_cover: Optional[bool] = Field(True, description="是否下载视频封面")
+    only_audio: Optional[bool] = Field(False, description="是否仅下载音频")
 
 async def stream_process_output(process: subprocess.Popen):
     """实时流式输出进程的输出"""
@@ -173,6 +174,10 @@ async def download_video(request: DownloadRequest):
         # 根据用户选择决定是否下载封面
         if not request.download_cover:
             command.append('--no-cover')
+        
+        # 根据用户选择决定是否仅下载音频
+        if request.only_audio:
+            command.append('--audio-only')
         
         # 添加其他 yutto 配置
         if not config['yutto']['resource']['require_subtitle']:

@@ -1,6 +1,21 @@
 # B站用户的SESSDATA，用于API认证
 SESSDATA: "Cookie里的SESSDATA字段值"
 
+# 视频摘要配置
+# CACHE_EMPTY_SUMMARY: 控制是否缓存无摘要内容的视频结果
+# 官方状态码含义：
+# - result_type=0: 没有摘要
+# - result_type=1: 仅存在摘要总结
+# - result_type=2: 存在摘要以及提纲
+#
+# - 设置为true时：缓存所有视频摘要结果，包括无摘要的视频(result_type=0)
+#   优点：减少对B站API的重复请求，提高响应速度，降低被限流风险
+#   缺点：占用更多数据库空间
+# - 设置为false时：只缓存有实际摘要内容的视频结果(result_type=1或2)
+#   优点：节省数据库空间
+#   缺点：对于无摘要的视频，每次都会重新请求B站API
+CACHE_EMPTY_SUMMARY: true  # 是否缓存空摘要结果
+
 # 原始历史记录数据的输入文件夹
 input_folder: "history_by_date"
 
@@ -59,6 +74,8 @@ yutto:
   resource:
     # 不下载字幕
     require_subtitle: false
+    # 默认是否仅下载音频
+    only_audio: false
   
   danmaku:
     # 设置弹幕字体大小
