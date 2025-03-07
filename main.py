@@ -5,6 +5,7 @@ import sys
 import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
+import platform
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -160,6 +161,22 @@ def setup_logging():
 
 # 在应用启动时调用
 setup_logging()
+
+# 检查系统资源（针对Linux系统）
+is_linux = platform.system().lower() == "linux"
+if is_linux:
+    try:
+        from scripts.system_resource_check import check_system_resources
+        resources = check_system_resources()
+        if not resources["summary"]["can_run_speech_to_text"]:
+            limitation = resources.get("summary", {}).get("resource_limitation", "未知原因")
+            print(f"警告: 系统资源不足，语音转文字功能将被禁用。限制原因: {limitation}")
+            print(f"系统信息: 内存: {resources['memory']['total_gb']}GB (可用: {resources['memory']['available_gb']}GB), "
+                  f"CPU: {resources['cpu']['physical_cores']}核心, 磁盘可用空间: {resources['disk']['free_gb']}GB")
+    except ImportError:
+        print("警告: 未安装psutil模块，无法检查系统资源。如需使用语音转文字功能，请安装psutil: pip install psutil")
+    except Exception as e:
+        print(f"警告: 检查系统资源时出错: {str(e)}")
 
 # 全局调度器实例
 scheduler_manager = None

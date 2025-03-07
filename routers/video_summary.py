@@ -355,6 +355,52 @@ async def get_video_summary(bvid: str, cid: int, up_mid: int, force_refresh: Opt
         else:
             print(f"跳过保存无摘要数据到数据库: {bvid}, {cid}, result_type={result_type}")
         
+        # 保存B站获取的摘要到./output/BSummary/{cid}目录
+        # 不管是否有摘要内容，都保存，因为判断太耗时间
+        try:
+            # 创建保存目录
+            save_dir = os.path.join("output", "BSummary", str(cid))
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # 构建完整的响应数据
+            response_data = {
+                "bvid": bvid,
+                "cid": cid,
+                "up_mid": up_mid,
+                "stid": stid,
+                "summary": summary,
+                "outline": outline_data,
+                "result_type": result_type,
+                "status_message": status_message,
+                "has_summary": has_summary,
+                "fetch_time": int(time.time()),
+                "update_time": int(time.time()),
+                "from_cache": False,
+                "api_response": api_result  # 保存原始API响应
+            }
+            
+            # 保存完整响应数据
+            response_path = os.path.join(save_dir, f"{cid}_response.json")
+            with open(response_path, 'w', encoding='utf-8') as f:
+                json.dump(response_data, f, ensure_ascii=False, indent=2)
+            
+            # 如果有摘要，单独保存摘要内容到文本文件，方便查看
+            if has_summary:
+                summary_path = os.path.join(save_dir, f"{cid}_summary.txt")
+                with open(summary_path, 'w', encoding='utf-8') as f:
+                    f.write(summary)
+                    
+                # 如果有提纲，单独保存提纲
+                if outline_data:
+                    outline_path = os.path.join(save_dir, f"{cid}_outline.json")
+                    with open(outline_path, 'w', encoding='utf-8') as f:
+                        json.dump(outline_data, f, ensure_ascii=False, indent=2)
+                        
+            print(f"已保存B站摘要到: {save_dir}")
+        except Exception as e:
+            # 保存到文件失败不影响API返回
+            print(f"警告: 保存B站摘要到文件失败: {str(e)}")
+        
         # 返回结果
         return {
             "bvid": bvid,
@@ -499,7 +545,7 @@ class CustomSummaryResponse(BaseModel):
 
 # 使用DeepSeek API生成自定义视频摘要
 async def generate_custom_summary(subtitle_content: str, model: str = "deepseek-chat", 
-                                 temperature: float = 0.7, max_tokens: int = 1000,
+                                 temperature: float = 0.7, max_tokens: int = 8000,
                                  top_p: float = 1.0, stream: bool = False,
                                  json_mode: bool = False, frequency_penalty: float = 0.0,
                                  presence_penalty: float = 0.0,
@@ -807,7 +853,7 @@ class CidSummaryRequest(BaseModel):
     cid: int = Field(..., description="视频的CID")
     model: Optional[str] = Field(config.get('deepseek', {}).get('default_model', 'deepseek-chat'), description="DeepSeek模型名称")
     temperature: Optional[float] = Field(config.get('deepseek', {}).get('default_settings', {}).get('temperature', 1.0), description="生成温度，控制创造性")
-    max_tokens: Optional[int] = Field(config.get('deepseek', {}).get('default_settings', {}).get('max_tokens', 1000), description="最大生成标记数")
+    max_tokens: Optional[int] = Field(config.get('deepseek', {}).get('default_settings', {}).get('max_tokens', 8000), description="最大生成标记数")
     top_p: Optional[float] = Field(config.get('deepseek', {}).get('default_settings', {}).get('top_p', 1.0), description="核采样阈值，控制输出的多样性")
     stream: Optional[bool] = Field(False, description="是否使用流式输出")
     json_mode: Optional[bool] = Field(False, description="是否使用JSON模式输出")
@@ -835,16 +881,37 @@ async def summarize_by_cid(request: CidSummaryRequest, background_tasks: Backgro
             detail=f"未找到CID {request.cid} 的字幕文件"
         )
 
-    # 读取字幕文件
-    with open(json_path, 'r', encoding='utf-8') as f:
-        subtitle_data = json.load(f)
-
-    # 提取字幕内容
-    subtitle_content = subtitle_data.get('content', '')
-    if not subtitle_content:
+    # 读取字幕文件 - 直接作为文本读取，不尝试解析为JSON
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            subtitle_content = f.read().strip()
+        
+        # 如果内容为空，抛出错误
+        if not subtitle_content:
+            raise HTTPException(
+                status_code=400,
+                detail="字幕文件内容为空"
+            )
+            
+        # 构造一个简单的元数据字典，用于返回结果
+        subtitle_data = {
+            "bvid": "",  # 这些字段可能在纯文本文件中不存在
+            "up_mid": 0
+        }
+    except json.JSONDecodeError:
+        # 如果JSON解析失败，直接读取为文本
+        with open(json_path, 'r', encoding='utf-8') as f:
+            subtitle_content = f.read().strip()
+            
+        # 构造一个简单的元数据字典
+        subtitle_data = {
+            "bvid": "",
+            "up_mid": 0
+        }
+    except Exception as e:
         raise HTTPException(
-            status_code=400,
-            detail="字幕文件内容为空"
+            status_code=500,
+            detail=f"读取字幕文件时出错: {str(e)}"
         )
 
     # 生成摘要
@@ -861,14 +928,144 @@ async def summarize_by_cid(request: CidSummaryRequest, background_tasks: Backgro
         background_tasks=background_tasks
         )
     
-    return {
-            "bvid": subtitle_data.get('bvid', ''),
-            "cid": request.cid,
-            "up_mid": subtitle_data.get('up_mid', 0),
-            "summary": result.get('summary', ''),
-            "success": result.get('success', False),
-            "message": result.get('message', ''),
-            "from_deepseek": True,
-            "tokens_used": result.get('tokens_used'),
-            "processing_time": result.get('processing_time')
-    } 
+    # 构建响应数据
+    response_data = {
+        "bvid": subtitle_data.get('bvid', ''),
+        "cid": request.cid,
+        "up_mid": subtitle_data.get('up_mid', 0),
+        "summary": result.get('summary', ''),
+        "success": result.get('success', False),
+        "message": result.get('message', ''),
+        "from_deepseek": True,
+        "tokens_used": result.get('tokens_used'),
+        "processing_time": result.get('processing_time')
+    }
+    
+    # 保存摘要内容到文件
+    if result.get('success', False) and result.get('summary'):
+        try:
+            # 创建保存目录
+            summary_dir = os.path.join("output", "summary", str(request.cid))
+            os.makedirs(summary_dir, exist_ok=True)
+            
+            # 保存摘要内容
+            summary_path = os.path.join(summary_dir, f"{request.cid}_summary.txt")
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                f.write(result.get('summary', ''))
+                
+            # 保存完整响应数据（包括token使用情况等）
+            response_path = os.path.join(summary_dir, f"{request.cid}_response.json")
+            with open(response_path, 'w', encoding='utf-8') as f:
+                json.dump(response_data, f, ensure_ascii=False, indent=4)
+                
+            print(f"摘要已保存到: {summary_path}")
+            print(f"完整响应已保存到: {response_path}")
+        except Exception as e:
+            print(f"保存摘要时出错: {str(e)}")
+            # 不影响正常返回，只记录错误
+    
+    return response_data 
+
+# 添加新的响应模型，用于检查本地摘要
+class LocalSummaryCheckResponse(BaseModel):
+    cid: int
+    exists: bool
+    summary_path: Optional[str] = None
+    response_path: Optional[str] = None
+    full_response: Optional[Dict[str, Any]] = None
+    message: str
+
+@router.get("/check_local_summary/{cid}", summary="检查本地是否存在摘要文件", response_model=LocalSummaryCheckResponse)
+async def check_local_summary(cid: int, include_content: bool = True):
+    """
+    检查本地是否存在指定CID的摘要文件
+    
+    参数:
+    - **cid**: 视频的CID
+    - **include_content**: 是否包含完整响应数据，默认为True
+    
+    返回:
+    - **exists**: 是否存在摘要文件
+    - **summary_path**: 摘要文件路径（如果存在）
+    - **response_path**: 响应数据文件路径（如果存在）
+    - **full_response**: 完整响应数据（如果存在且include_content=True）
+    - **message**: 提示信息
+    """
+    try:
+        # 构建摘要文件路径
+        summary_dir = os.path.join("output", "summary", str(cid))
+        summary_path = os.path.join(summary_dir, f"{cid}_summary.txt")
+        response_path = os.path.join(summary_dir, f"{cid}_response.json")
+        
+        # 检查文件是否存在
+        summary_exists = os.path.exists(summary_path)
+        response_exists = os.path.exists(response_path)
+        
+        # 如果两个文件都不存在，返回不存在的响应
+        if not summary_exists and not response_exists:
+            return {
+                "cid": cid,
+                "exists": False,
+                "summary_path": None,
+                "response_path": None,
+                "full_response": None,
+                "message": f"未找到CID {cid} 的本地摘要文件"
+            }
+        
+        # 构建响应数据
+        result = {
+            "cid": cid,
+            "exists": True,
+            "summary_path": summary_path if summary_exists else None,
+            "response_path": response_path if response_exists else None,
+            "full_response": None,
+            "message": f"找到CID {cid} 的本地摘要文件"
+        }
+        
+        # 如果需要包含内容
+        if include_content:
+            # 读取完整响应数据
+            if response_exists:
+                try:
+                    with open(response_path, 'r', encoding='utf-8') as f:
+                        result["full_response"] = json.load(f)
+                except Exception as e:
+                    result["message"] += f"，但读取响应数据失败: {str(e)}"
+                    # 如果读取JSON失败，尝试从TXT文件构建简单响应
+                    if summary_exists:
+                        try:
+                            with open(summary_path, 'r', encoding='utf-8') as f:
+                                summary_content = f.read()
+                                # 构建简单的响应对象
+                                result["full_response"] = {
+                                    "cid": cid,
+                                    "summary": summary_content,
+                                    "success": True,
+                                    "message": "从摘要文件读取",
+                                    "from_deepseek": True
+                                }
+                        except Exception as e2:
+                            result["message"] += f"，读取摘要文件也失败: {str(e2)}"
+            # 如果没有响应数据文件，但有摘要文件
+            elif summary_exists:
+                try:
+                    with open(summary_path, 'r', encoding='utf-8') as f:
+                        summary_content = f.read()
+                        # 构建简单的响应对象
+                        result["full_response"] = {
+                            "cid": cid,
+                            "summary": summary_content,
+                            "success": True,
+                            "message": "从摘要文件读取",
+                            "from_deepseek": True
+                        }
+                except Exception as e:
+                    result["message"] += f"，但读取摘要内容失败: {str(e)}"
+        
+        return result
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"检查本地摘要文件时出错: {str(e)}"
+        ) 
