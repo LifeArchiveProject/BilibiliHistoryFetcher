@@ -185,7 +185,8 @@ async def get_history_page(
     tag_name: Optional[str] = Query(None, description="视频子分区名称"),
     main_category: Optional[str] = Query(None, description="主分区名称"),
     date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd"),
-    use_local_images: bool = Query(False, description="是否使用本地图片")
+    use_local_images: bool = Query(False, description="是否使用本地图片"),
+    business: Optional[str] = Query(None, description="业务类型，如archive(普通视频)、pgc(番剧)、live(直播)、article-list(文集)、article(文章)")
 ):
     """分页查询历史记录，支持跨年份查询"""
     print("\n=== 接收到的请求参数 ===")
@@ -196,6 +197,7 @@ async def get_history_page(
     print(f"主分区名称(main_category): {main_category if main_category else '无'}")
     print(f"日期范围(date_range): {date_range if date_range else '无'}")
     print(f"是否使用本地图片(use_local_images): {use_local_images}")
+    print(f"业务类型(business): {business if business else '全部'}")
     print("=====================\n")
 
     try:
@@ -242,6 +244,11 @@ async def get_history_page(
             elif tag_name:
                 query += " AND tag_name = ?"
                 params.append(tag_name)
+            
+            # 添加业务类型筛选
+            if business:
+                query += " AND business = ?"
+                params.append(business)
                 
             queries.append(query)
         
