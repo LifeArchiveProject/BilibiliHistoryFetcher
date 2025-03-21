@@ -57,13 +57,13 @@ def main():
         freeze_support()
         
         print("正在启动服务器...")
-        print("API文档:http://localhost:8899/docs")
+        print("API文档:http://0.0.0.0:8899/docs")
         
         # 启动FastAPI应用
         uvicorn.run(
             "main:app",
-            host="127.0.0.1",
-            port=8000,
+            host="0.0.0.0",
+            port=8899,
             reload=False
         )
     except Exception as e:

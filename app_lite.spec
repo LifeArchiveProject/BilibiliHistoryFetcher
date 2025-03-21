@@ -18,7 +18,7 @@ a = Analysis(
         (yutto_exe, '.'),
     ],
     datas=[
-        ('config/*', 'config'),
+        ('config_clean/*', 'config'),
         ('scripts', 'scripts'),
         ('routers', 'routers'),
         ('main.py', '.'),
@@ -153,7 +153,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[
+    excludes=['torch', 'torchvision', 'torchaudio', 'faster_whisper', 
         'torch',
         'torchaudio',
         'torchvision',
@@ -171,7 +171,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='BilibiliHistoryAnalyzer',
+    name='BilibiliHistoryAnalyzer_Lite',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -191,5 +191,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='BilibiliHistoryAnalyzer',
+    name='BilibiliHistoryAnalyzer_Lite',
 )

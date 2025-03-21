@@ -18,13 +18,15 @@ a = Analysis(
         (yutto_exe, '.'),
     ],
     datas=[
-        ('config/*', 'config'),
+        ('config_clean/*', 'config'),
         ('scripts', 'scripts'),
         ('routers', 'routers'),
         ('main.py', '.'),
         (os.path.join(venv_site_packages, 'pyecharts/datasets'), 'pyecharts/datasets'),
         (os.path.join(venv_site_packages, 'pyecharts/render/templates'), 'pyecharts/render/templates'),
         (os.path.join(venv_site_packages, 'yutto'), 'yutto'),
+        (os.path.join(venv_site_packages, 'faster_whisper/assets'), 'faster_whisper/assets'),
+        (os.path.join(venv_site_packages, 'faster_whisper'), 'faster_whisper'),
         # 添加requirements.txt中所有依赖的相关模块
         (os.path.join(venv_site_packages, 'uvicorn'), 'uvicorn'),
         (os.path.join(venv_site_packages, 'fastapi'), 'fastapi'),
@@ -48,6 +50,8 @@ a = Analysis(
         (os.path.join(venv_site_packages, 'pyecharts'), 'pyecharts'),
         (os.path.join(venv_site_packages, 'PIL'), 'PIL'),
         (os.path.join(venv_site_packages, 'yutto'), 'yutto'),
+        (os.path.join(venv_site_packages, 'faster_whisper/assets'), 'faster_whisper/assets'),
+        (os.path.join(venv_site_packages, 'faster_whisper'), 'faster_whisper'),
         (os.path.join(venv_site_packages, 'dateutil'), 'dateutil'),
         (os.path.join(venv_site_packages, 'psutil'), 'psutil'),
         (os.path.join(venv_site_packages, 'tqdm'), 'tqdm'),
@@ -133,6 +137,13 @@ a = Analysis(
         'psutil',
         'tqdm',
         'email_validator',
+        'faster_whisper',
+        'faster_whisper.audio',
+        'faster_whisper.tokenizer',
+        'faster_whisper.transcribe',
+        'faster_whisper.utils',
+        'faster_whisper.vad',
+        'faster_whisper.feature_extractor',
         # 以下是fastapi和其他库的子模块
         'fastapi.applications',
         'fastapi.routing',
@@ -154,10 +165,10 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'torch',
-        'torchaudio',
-        'torchvision',
-        'faster_whisper',
+        
+        
+        
+        
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
@@ -171,7 +182,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='BilibiliHistoryAnalyzer',
+    name='BilibiliHistoryAnalyzer_Full',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -191,5 +202,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='BilibiliHistoryAnalyzer',
+    name='BilibiliHistoryAnalyzer_Full',
 )

@@ -189,6 +189,78 @@ output/
 ├── heatmap/             # 热力图输出
 ```
 
+## 应用打包
+
+本项目提供了自动化打包脚本，可以将应用打包成独立的可执行文件，便于分发和部署。打包过程会自动处理依赖并清理敏感信息。
+
+### 打包前准备
+
+确保已经安装了PyInstaller：
+
+```bash
+pip install pyinstaller
+```
+
+### 打包命令
+
+使用以下命令进行打包：
+
+```bash
+# 打包精简版（不含torch，不支持音频转文字功能）
+python build.py lite
+
+# 打包完整版（含torch，支持所有功能）
+python build.py full
+
+# 同时打包两个版本
+python build.py all
+```
+
+### 打包版本说明
+
+1. **精简版 (Lite)**
+   - 不包含PyTorch和音频转文字相关模块
+   - 体积较小，适合只需基本功能的用户
+   - 不支持音频转文字和本地视频摘要功能
+   - 输出目录: `dist/BilibiliHistoryAnalyzer_Lite/`
+
+2. **完整版 (Full)**
+   - 包含所有功能，包括PyTorch和音频转文字
+   - 体积较大，适合需要完整功能的用户
+   - 支持所有功能，包括音频转文字和本地视频摘要
+   - 输出目录: `dist/BilibiliHistoryAnalyzer_Full/`
+
+### 敏感信息处理
+
+打包过程会自动处理配置文件中的敏感信息：
+
+- 创建临时清理过的配置文件，替换以下敏感字段为示例值：
+  - `SESSDATA`：替换为"你的SESSDATA"
+  - `email`：邮箱相关信息替换为示例邮箱地址和说明
+  - `ssl_certfile`/`ssl_keyfile`：替换为示例路径
+  - `api_key`：替换为"你的API密钥"
+  
+- 打包完成后，临时文件会被自动删除
+- 打包版本中的配置文件包含原始结构但敏感字段被替换为示例值，用户需要首次运行时填写实际信息
+
+### 运行打包后的应用
+
+在目标系统上直接运行可执行文件：
+
+```
+# Windows系统
+BilibiliHistoryAnalyzer_Full.exe
+```
+
+首次运行注意事项：
+
+1. 打开 `_internal/config/config.yaml` 文件
+2. 将示例值替换为您的实际配置信息：
+   - 填写您的B站 `SESSDATA`
+   - 配置邮箱信息（如需使用邮件通知功能）
+   - 配置DeepSeek API密钥（如需使用AI摘要功能）
+3. 保存配置文件后重新启动应用
+
 ## 安全说明
 
 1. API请求限制：
