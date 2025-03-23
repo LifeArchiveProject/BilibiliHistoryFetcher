@@ -74,7 +74,8 @@ def get_db():
             ('legacy_file_format', 1),
             ('journal_mode', 'DELETE'),
             ('synchronous', 'NORMAL'),
-            ('user_version', 317)  # 使用固定的用户版本号
+            ('user_version', 317),  # 使用固定的用户版本号
+            ('encoding', 'UTF8')    # 设置数据库编码为UTF8 (不使用连字符)
         ]
         
         for pragma, value in pragmas:
