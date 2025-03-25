@@ -1,11 +1,4 @@
-# Bilibili History Analyzer (获取B站历史记录并进行分析的工具)
-
-<div align="center">
-  <a href="https://github.com/SocialSisterYi/bilibili-API-collect" target="_blank">
-    <img src="https://socialsisteryi.github.io/bilibili-API-collect/logo2.jpg" alt="bilibili-API-collect Logo" width="64" height="64">
-  </a>
-  <p>本项目基于 <a href="https://github.com/SocialSisterYi/bilibili-API-collect" target="_blank">bilibili-API-collect</a> 提供的API文档开发，感谢 SocialSisterYi 的杰出贡献。</p>
-</div>
+# BilibiliHistoryFetcher
 
 由于b站历史只会显示最近几个月的，所以历史记录会慢慢过期，因此该项目用于获取、处理、分析和可视化哔哩哔哩用户的观看历史数据。它提供了完整的数据处理流程，从数据获取到可视化展示，并支持自动化运行和邮件通知。
 
@@ -32,38 +25,20 @@
 
 4. **视频下载功能**
    - 支持下载B站视频
-   - 自定义下载目录
-   - 实时显示下载进度
-
-<div align="center">
-  <a href="https://yutto.nyakku.moe/" target="_blank">
-    <img src="https://yutto.nyakku.moe/logo-mini.svg" alt="Yutto Logo" width="32" height="32">
-  </a>
-  <p>视频下载功能通过 <a href="https://yutto.nyakku.moe/" target="_blank">Yutto</a> 实现，感谢 Yutto 开发团队的开源贡献。</p>
-</div>
 
 5. **图片管理功能**
    - 下载视频封面
    - 下载UP主头像
-   - 支持本地图片缓存
-   - 支持按年份下载
    - 自动清理无效图片
 
 6. **自动化任务**
    - 支持定时任务调度
-   - 自动数据同步
-   - 错误重试机制
    - 邮件通知功能
 
 7. **本地摘要功能**
    - DeepSeek AI 集成
    - 使用faster whisper 将音频转换为字幕
    - 视频摘要获取与保存
-
-8. **API接口**
-   - RESTful API设计
-   - 完整的接口文档
-   - 支持多种查询方式
 
 ## 系统要求
 
@@ -193,7 +168,7 @@ output/
 
 本项目提供了自动化打包脚本，可以将应用打包成独立的可执行文件，便于分发和部署。打包过程会自动处理依赖并清理敏感信息。
 
-### 打包前准备
+**打包前准备**
 
 确保已经安装了PyInstaller：
 
@@ -201,7 +176,7 @@ output/
 pip install pyinstaller
 ```
 
-### 打包命令
+**打包命令**
 
 使用以下命令进行打包：
 
@@ -216,7 +191,7 @@ python build.py full
 python build.py all
 ```
 
-### 打包版本说明
+**打包版本说明**
 
 1. **精简版 (Lite)**
    - 不包含PyTorch和音频转文字相关模块
@@ -230,7 +205,7 @@ python build.py all
    - 支持所有功能，包括音频转文字和本地视频摘要
    - 输出目录: `dist/BilibiliHistoryAnalyzer_Full/`
 
-### 敏感信息处理
+**敏感信息处理**
 
 打包过程会自动处理配置文件中的敏感信息：
 
@@ -243,7 +218,7 @@ python build.py all
 - 打包完成后，临时文件会被自动删除
 - 打包版本中的配置文件包含原始结构但敏感字段被替换为示例值，用户需要首次运行时填写实际信息
 
-### 运行打包后的应用
+**运行打包后的应用**
 
 在目标系统上直接运行可执行文件：
 
@@ -260,41 +235,6 @@ BilibiliHistoryAnalyzer_Full.exe
    - 配置邮箱信息（如需使用邮件通知功能）
    - 配置DeepSeek API密钥（如需使用AI摘要功能）
 3. 保存配置文件后重新启动应用
-
-## 安全说明
-
-1. API请求限制：
-   - 默认每秒1次请求
-   - 可在配置文件中调整
-
-2. Cookie安全：
-   - 定期更新SESSDATA
-   - 不要分享配置文件
-
-## 常见问题
-
-1. **Cookie经常失效**
-   - 删除localStorage中的`ac_time_value`
-   - 重新获取SESSDATA
-   - 更新配置文件
-
-2. **视频下载失败**
-   - 确保已安装FFmpeg
-   - 检查网络连接
-   - 确认视频是否可以下载（会员限制等）
-   - 检查磁盘空间是否充足
-
-3. **图片下载问题**
-   - 检查网络连接
-   - 确保有足够的磁盘空间
-   - 尝试清理并重新下载
-   - 检查图片目录权限
-
-4. **音频转文字问题**
-   - 确保已正确安装PyTorch和相关依赖
-   - 检查CUDA版本是否兼容（GPU用户）
-   - 确保系统内存充足（建议至少4GB可用内存）
-   - 如遇性能问题，可尝试使用`--force-cuda`指定其他CUDA版本
 
 ## 贡献指南
 
