@@ -1008,3 +1008,111 @@ async def delete_downloaded_video(cid: int, delete_directory: bool = False, dire
             "status": "error",
             "message": f"删除视频文件时出错: {str(e)}"
         } 
+
+@router.get("/stream_danmaku", summary="获取视频弹幕文件")
+async def stream_danmaku(file_path: Optional[str] = None, cid: Optional[int] = None):
+    """
+    返回视频弹幕文件(.ass)，用于前端播放时显示弹幕
+    
+    Args:
+        file_path: 视频文件的完整路径，会自动查找对应的ass文件
+        cid: 可选，如果提供CID而不是文件路径，将尝试查找对应CID的弹幕文件
+    
+    Returns:
+        FileResponse: 弹幕文件响应
+    """
+    try:
+        if not file_path and not cid:
+            raise HTTPException(
+                status_code=400,
+                detail="必须提供视频文件路径(file_path)或视频CID(cid)参数"
+            )
+            
+        danmaku_path = None
+        
+        # 1. 如果提供了文件路径，尝试查找对应的ass文件
+        if file_path:
+            # 检查视频文件是否存在
+            if not os.path.exists(file_path):
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"视频文件不存在: {file_path}"
+                )
+                
+            # 尝试找到同名的.ass文件
+            base_path = file_path.rsplit('.', 1)[0]  # 移除扩展名
+            possible_ass_path = f"{base_path}.ass"
+            
+            if os.path.exists(possible_ass_path):
+                danmaku_path = possible_ass_path
+            else:
+                # 尝试在同一目录下查找任何包含相同CID的.ass文件
+                directory = os.path.dirname(file_path)
+                file_name = os.path.basename(file_path)
+                
+                # 尝试从文件名提取CID
+                cid_match = None
+                file_parts = file_name.split('_')
+                if len(file_parts) > 1:
+                    try:
+                        # 尝试获取最后一部分中的CID (去掉扩展名)
+                        last_part = file_parts[-1].split('.')[0]
+                        if last_part.isdigit():
+                            cid_match = last_part
+                    except:
+                        pass
+                
+                if cid_match:
+                    # 在同一目录下查找包含相同CID的.ass文件
+                    for file in os.listdir(directory):
+                        if file.endswith('.ass') and cid_match in file:
+                            danmaku_path = os.path.join(directory, file)
+                            break
+        
+        # 2. 如果提供了CID，在下载目录中查找对应的弹幕文件
+        elif cid:
+            download_dir = os.path.normpath(config['yutto']['basic']['dir'])
+            
+            # 确保下载目录存在
+            if not os.path.exists(download_dir):
+                raise HTTPException(
+                    status_code=404,
+                    detail="下载目录不存在"
+                )
+                
+            # 递归遍历下载目录查找匹配CID的弹幕文件
+            for root, dirs, files in os.walk(download_dir):
+                # 检查目录名是否包含CID
+                if f"_{cid}" in os.path.basename(root):
+                    # 检查目录中的文件
+                    for file in files:
+                        # 检查是否为弹幕文件
+                        if file.endswith('.ass') and f"_{cid}" in file:
+                            danmaku_path = os.path.join(root, file)
+                            break
+                    
+                    # 如果在当前目录找到了弹幕文件，就不再继续查找
+                    if danmaku_path:
+                        break
+        
+        # 检查是否找到弹幕文件
+        if not danmaku_path:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到匹配的弹幕文件"
+            )
+            
+        # 返回文件响应
+        return FileResponse(
+            danmaku_path,
+            media_type='text/plain',
+            filename=os.path.basename(danmaku_path)
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"获取弹幕文件时出错: {str(e)}"
+        )
