@@ -1,11 +1,10 @@
 import asyncio
 import logging
 import os
+import platform
 import sys
-import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
-import platform
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,10 +32,11 @@ from routers import (
     deepseek,
     audio_to_text,
     email_config,
-    comment
+    comment,
+    data_sync
 )
-from scripts.scheduler_manager import SchedulerManager
 from scripts.scheduler_db_enhanced import EnhancedSchedulerDB
+from scripts.scheduler_manager import SchedulerManager
 from scripts.utils import load_config
 
 
@@ -286,6 +286,7 @@ app.include_router(deepseek.router, prefix="/deepseek", tags=["DeepSeek AI"])
 app.include_router(audio_to_text.router, prefix="/audio_to_text", tags=["音频转文字"])
 app.include_router(email_config.router, prefix="/config", tags=["配置管理"])
 app.include_router(comment.router, prefix="/comment", tags=["评论管理"])
+app.include_router(data_sync.router, prefix="/data_sync", tags=["数据同步与完整性检查"])
 
 # 入口点，启动应用
 if __name__ == "__main__":
