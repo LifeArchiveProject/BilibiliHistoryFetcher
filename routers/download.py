@@ -1,8 +1,8 @@
 import asyncio
 import os
+import re
 import subprocess
 import sys
-import re
 from datetime import datetime
 from typing import Optional
 
@@ -12,6 +12,16 @@ from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 
 from scripts.utils import load_config
+
+# 尝试导入history模块，用于处理图像URL
+try:
+    from routers.history import _process_image_url, get_video_by_cid, _process_record
+except ImportError:
+    # 如果无法直接导入，则在运行时动态加载
+    _process_image_url = None
+    get_video_by_cid = None
+    _process_record = None
+    print("无法从history模块导入_process_image_url、get_video_by_cid和_process_record函数")
 
 router = APIRouter()
 config = load_config()
@@ -671,7 +681,7 @@ async def check_video_download(cids: str):
         }
 
 @router.get("/list_downloaded_videos", summary="获取或搜索已下载视频列表")
-async def list_downloaded_videos(search_term: Optional[str] = None, limit: int = 100, page: int = 1):
+async def list_downloaded_videos(search_term: Optional[str] = None, limit: int = 100, page: int = 1, use_local_images: bool = False):
     """
     获取已下载的视频列表，支持通过标题搜索
     
@@ -679,6 +689,7 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
         search_term: 可选，搜索关键词，会在文件名和目录名中查找
         limit: 每页返回的结果数量，默认100
         page: 页码，从1开始，默认为第1页
+        use_local_images: 是否使用本地图片，默认为false
     
     Returns:
         dict: 包含已下载视频列表的字典
@@ -698,6 +709,18 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
                 "limit": limit,
                 "pages": 0
             }
+        
+        # 获取数据库连接
+        try:
+            import sqlite3
+            db_path = os.path.join('output', 'bilibili_history.db')
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row  # 将结果转换为字典形式
+            db_available = True
+        except Exception as e:
+            print(f"无法连接到数据库: {str(e)}")
+            db_available = False
+            conn = None
         
         # 递归遍历下载目录查找视频文件
         videos = []
@@ -796,14 +819,100 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
                     })
             
             if video_files:
-                videos.append({
+                video_info = {
                     "directory": root,
                     "dir_name": dir_name,
                     "title": title,
                     "cid": cid,
+                    "bvid": None,  # 初始化bvid字段为None
                     "download_date": date_time,
-                    "files": video_files
-                })
+                    "files": video_files,
+                    "cover": None,
+                    "author_face": None,
+                    "author_name": None,
+                    "author_mid": None
+                }
+                
+                # 如果有CID，尝试通过API获取更多信息
+                if cid and cid.isdigit():
+                    try:
+                        # 方式1: 直接调用get_video_by_cid函数（如果已成功导入）
+                        if get_video_by_cid:
+                            print(f"【调试】使用导入的get_video_by_cid函数获取CID={cid}的视频信息")
+                            # 调用API函数获取视频信息
+                            api_response = await get_video_by_cid(int(cid), use_local_images)
+                            
+                            if api_response["status"] == "success" and "data" in api_response:
+                                video_data = api_response["data"]
+                                video_info["title"] = video_data.get("title") or video_info["title"]
+                                video_info["cover"] = video_data.get("cover")
+                                video_info["author_face"] = video_data.get("author_face")
+                                video_info["author_name"] = video_data.get("author_name")
+                                video_info["author_mid"] = video_data.get("author_mid")
+                                video_info["bvid"] = video_data.get("bvid")  # 添加bvid字段
+                                print(f"【调试】成功通过API获取到视频信息: {video_data.get('title')}")
+                        # 方式2: 如果API函数未导入，则回退到直接查询数据库
+                        elif db_available:
+                            print(f"【调试】回退到直接查询数据库获取CID={cid}的视频信息")
+                            cursor = conn.cursor()
+                            # 查询所有历史记录表
+                            years = [table_name.split('_')[-1] 
+                                    for (table_name,) in cursor.execute(
+                                        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'bilibili_history_%'"
+                                    ).fetchall() 
+                                    if table_name.split('_')[-1].isdigit()]
+                            
+                            # 构建UNION ALL查询所有年份表
+                            if years:
+                                queries = []
+                                for year in years:
+                                    queries.append(f"SELECT title, cover, author_face, author_name, author_mid, bvid FROM bilibili_history_{year} WHERE cid = {cid} LIMIT 1")
+                                
+                                # 执行联合查询
+                                union_query = " UNION ALL ".join(queries) + " LIMIT 1"
+                                result = cursor.execute(union_query).fetchone()
+                                
+                                if result:
+                                    # 设置封面和作者信息
+                                    video_info["title"] = result["title"] or video_info["title"]
+                                    video_info["cover"] = result["cover"]
+                                    video_info["author_face"] = result["author_face"]
+                                    video_info["author_name"] = result["author_name"]
+                                    video_info["author_mid"] = result["author_mid"]
+                                    video_info["bvid"] = result["bvid"]  # 添加bvid字段
+                                    
+                                    # 处理图片URL
+                                    if _process_image_url:
+                                        # 使用导入的函数处理图片URL
+                                        if video_info["cover"]:
+                                            video_info["cover"] = _process_image_url(video_info["cover"], 'covers', use_local_images)
+                                        if video_info["author_face"]:
+                                            video_info["author_face"] = _process_image_url(video_info["author_face"], 'avatars', use_local_images)
+                                    elif hasattr(sys.modules.get('routers.history'), '_process_image_url'):
+                                        # 如果导入失败但模块运行时可访问，再次尝试
+                                        process_url = getattr(sys.modules.get('routers.history'), '_process_image_url')
+                                        if video_info["cover"]:
+                                            video_info["cover"] = process_url(video_info["cover"], 'covers', use_local_images)
+                                        if video_info["author_face"]:
+                                            video_info["author_face"] = process_url(video_info["author_face"], 'avatars', use_local_images)
+                                    else:
+                                        # 简单的URL处理逻辑，作为后备方案
+                                        if use_local_images:
+                                            import hashlib
+                                            if video_info["cover"]:
+                                                cover_hash = hashlib.md5(video_info["cover"].encode()).hexdigest()
+                                                video_info["cover"] = f"http://localhost:8899/images/local/covers/{cover_hash}"
+                                            if video_info["author_face"]:
+                                                avatar_hash = hashlib.md5(video_info["author_face"].encode()).hexdigest()
+                                                video_info["author_face"] = f"http://localhost:8899/images/local/avatars/{avatar_hash}"
+                    except Exception as e:
+                        print(f"获取视频信息时出错: {str(e)}")
+                
+                videos.append(video_info)
+        
+        # 如果数据库连接已打开，关闭它
+        if conn:
+            conn.close()
         
         # 计算分页
         total_videos = len(videos)
@@ -831,7 +940,7 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
         return {
             "status": "error",
             "message": f"获取已下载视频列表时出错: {str(e)}"
-        } 
+        }
 
 @router.get("/stream_video", summary="获取已下载视频的流媒体数据")
 async def stream_video(file_path: str):

@@ -970,4 +970,98 @@ async def get_video_remarks(request: BatchRemarksRequest):
         )
     finally:
         if conn:
-            conn.close() 
+            conn.close()
+
+@router.get("/by_cid/{cid}", summary="根据CID查询视频详情")
+async def get_video_by_cid(
+    cid: int,
+    use_local_images: bool = Query(False, description="是否使用本地图片")
+):
+    """
+    根据视频CID查询详细信息
+    
+    Args:
+        cid: 视频的CID
+        use_local_images: 是否使用本地图片
+        
+    Returns:
+        视频的详细信息，包括标题、封面和作者信息
+    """
+    print(f"【调试】开始根据CID={cid}查询视频信息")
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        # 获取所有年份表
+        years = get_available_years()
+        if not years:
+            print(f"【调试】未找到任何历史记录数据表")
+            return {
+                "status": "error",
+                "message": "未找到任何历史记录数据"
+            }
+        
+        print(f"【调试】找到以下年份表: {years}")
+        
+        # 构建UNION ALL查询
+        queries = []
+        for year in years:
+            table_name = f"bilibili_history_{year}"
+            # 选择与视频相关的所有字段
+            queries.append(f"""
+                SELECT 
+                    id, title, long_title, cover, covers, uri, oid, epid, bvid, page, 
+                    cid, part, business, dt, videos, author_name, author_face, author_mid, 
+                    view_at, progress, badge, show_title, duration, current, total, 
+                    new_desc, is_finish, is_fav, kid, tag_name, live_status, main_category
+                FROM {table_name} 
+                WHERE cid = {cid}
+            """)
+        
+        # 组合所有查询，LIMIT放在最后，不使用括号
+        union_query = f"{' UNION ALL '.join(queries)} LIMIT 1"
+        print(f"【调试】CID查询SQL: {union_query}")
+        
+        # 执行查询
+        cursor.execute(union_query)
+        columns = [description[0] for description in cursor.description]
+        
+        record = cursor.fetchone()
+        if not record:
+            print(f"【调试】未找到CID为{cid}的视频记录")
+            return {
+                "status": "error",
+                "message": f"未找到CID为{cid}的视频记录"
+            }
+        
+        print(f"【调试】找到CID={cid}的记录，开始处理")
+        
+        # 构建记录字典
+        record_dict = dict(zip(columns, record))
+        
+        # 打印记录内容以便调试
+        print(f"【调试】原始记录: {record_dict}")
+        
+        # 处理图片URL
+        record_dict = _process_record(record_dict, use_local_images)
+        
+        # 添加视频的播放时间（人类可读格式）
+        if 'view_at' in record_dict and record_dict['view_at']:
+            record_dict['view_time'] = datetime.fromtimestamp(record_dict['view_at']).strftime("%Y-%m-%d %H:%M:%S")
+        
+        print(f"【调试】处理后的记录: {record_dict}")
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "data": record_dict
+        }
+    except Exception as e:
+        print(f"查询CID时出错: {str(e)}")
+        if 'conn' in locals() and conn:
+            conn.close()
+        return {
+            "status": "error",
+            "message": f"查询视频详情时出错: {str(e)}"
+        } 
