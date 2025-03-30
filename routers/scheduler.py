@@ -119,6 +119,9 @@ def _build_task_info(task_data):
         "params": task_data.get('params', {}),
         "schedule_type": task_data.get('schedule_type') or schedule_type,
         "schedule_time": task_data.get('schedule_time'),
+        "schedule_delay": task_data.get('schedule_delay'),
+        "interval_value": task_data.get('interval_value'),
+        "interval_unit": task_data.get('interval_unit'),
         "enabled": bool(task_data.get('enabled', True)),
         "priority": task_data.get('priority', 0),
         "tags": task_data.get('tags') or []

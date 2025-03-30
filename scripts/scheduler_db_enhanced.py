@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
+import calendar
 
 import yaml
 from dateutil.relativedelta import relativedelta
@@ -87,6 +88,8 @@ class EnhancedSchedulerDB(SchedulerDB):
             schedule_type TEXT NOT NULL,
             schedule_time TEXT,
             schedule_delay INTEGER,
+            interval_value INTEGER,
+            interval_unit TEXT,
             enabled INTEGER DEFAULT 1,
             task_type TEXT DEFAULT 'main',
             created_at TIMESTAMP DEFAULT (datetime('now', 'localtime')),
@@ -454,12 +457,21 @@ class EnhancedSchedulerDB(SchedulerDB):
             params_json = json.dumps(params) if params else None
             tags = json.dumps(task_data.get('tags', [])) if task_data.get('tags') else '[]'
             
+            # 处理interval类型任务的特殊字段
+            interval_value = None
+            interval_unit = None
+            if task_data.get('schedule_type') == 'interval':
+                interval_value = task_data.get('interval_value', task_data.get('interval'))
+                interval_unit = task_data.get('interval_unit', task_data.get('unit'))
+                logger.info(f"设置间隔执行任务: 每 {interval_value} {interval_unit}")
+            
             # 插入主任务
             cursor.execute("""
             INSERT INTO main_tasks (
                 task_id, name, endpoint, method, params, schedule_type, 
-                schedule_time, schedule_delay, enabled, task_type, last_modified
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                schedule_time, schedule_delay, interval_value, interval_unit, 
+                enabled, task_type, last_modified
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 task_id,
                 task_data.get('name', task_id),
@@ -469,6 +481,8 @@ class EnhancedSchedulerDB(SchedulerDB):
                 task_data.get('schedule_type', 'daily'),
                 task_data.get('schedule_time'),
                 task_data.get('schedule_delay'),
+                interval_value,
+                interval_unit,
                 task_data.get('enabled', 1),
                 'main',
                 datetime.now().isoformat()
@@ -507,6 +521,12 @@ class EnhancedSchedulerDB(SchedulerDB):
                 if key in ['name', 'endpoint', 'method', 'schedule_type', 'schedule_time', 
                           'schedule_delay', 'enabled']:
                     fields.append(f"{key} = ?")
+                    values.append(value)
+                elif key == 'interval_value' or key == 'interval':
+                    fields.append("interval_value = ?")
+                    values.append(value)
+                elif key == 'interval_unit' or key == 'unit':
+                    fields.append("interval_unit = ?")
                     values.append(value)
                 elif key == 'params':
                     # 如果是发送邮件任务，确保params包含必要的内容
@@ -690,6 +710,64 @@ class EnhancedSchedulerDB(SchedulerDB):
         LEFT JOIN task_dependencies td ON s.task_id = td.task_id
         WHERE s.task_id = ?
         ''', (task_id,))
+        
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        task_data = dict(row)
+        # 处理JSON字段
+        if task_data.get('params'):
+            try:
+                task_data['params'] = json.loads(task_data['params'])
+            except:
+                task_data['params'] = {}
+        
+        if task_data.get('tags'):
+            try:
+                task_data['tags'] = json.loads(task_data['tags'])
+            except:
+                task_data['tags'] = []
+        
+        # 使用本地时间替换原始时间
+        task_data['created_at'] = task_data.pop('created_at_local')
+        task_data['last_modified'] = task_data.pop('last_modified_local')
+        
+        # 获取依赖任务信息
+        cursor.execute('''
+        SELECT td.depends_on, COALESCE(mt.name, st.name) as depends_on_name
+        FROM task_dependencies td
+        LEFT JOIN main_tasks mt ON td.depends_on = mt.task_id
+        LEFT JOIN sub_tasks st ON td.depends_on = st.task_id
+        WHERE td.task_id = ?
+        ''', (task_id,))
+        
+        dependencies = cursor.fetchall()
+        if dependencies:
+            task_data['depends_on'] = {
+                'task_id': dependencies[0][0],
+                'name': dependencies[0][1]
+            }
+        
+        return task_data
+    
+    def get_sub_task(self, parent_id: str, task_id: str) -> Optional[Dict]:
+        """获取指定主任务下的特定子任务"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+        SELECT s.*, 
+               sts.last_run_time, sts.next_run_time, sts.last_status,
+               sts.total_runs, sts.success_runs, sts.fail_runs,
+               sts.avg_duration, sts.last_error, sts.tags,
+               sts.success_rate,
+               s.created_at as created_at_local,
+               s.last_modified as last_modified_local,
+               td.depends_on
+        FROM sub_tasks s
+        LEFT JOIN sub_task_status sts ON s.task_id = sts.task_id
+        LEFT JOIN task_dependencies td ON s.task_id = td.task_id
+        WHERE s.task_id = ? AND s.parent_id = ?
+        ''', (task_id, parent_id))
         
         row = cursor.fetchone()
         if not row:
@@ -923,15 +1001,19 @@ class EnhancedSchedulerDB(SchedulerDB):
             logger.error(f"更新子任务失败: {str(e)}")
             return False
     
-    def delete_subtask(self, task_id: str) -> bool:
-        """删除子任务"""
+    def delete_subtask(self, task_id: str, parent_id: str = None) -> bool:
+        """删除子任务，可选指定父任务ID以确保只删除特定主任务下的子任务"""
         try:
             cursor = self.conn.cursor()
             
             # 检查任务是否存在且为子任务
-            cursor.execute("SELECT COUNT(*) FROM sub_tasks WHERE task_id = ?", (task_id,))
+            if parent_id:
+                cursor.execute("SELECT COUNT(*) FROM sub_tasks WHERE task_id = ? AND parent_id = ?", (task_id, parent_id))
+            else:
+                cursor.execute("SELECT COUNT(*) FROM sub_tasks WHERE task_id = ?", (task_id,))
+                
             if cursor.fetchone()[0] == 0:
-                logger.error(f"子任务 '{task_id}' 不存在")
+                logger.error(f"子任务 '{task_id}' 不存在" + (f" 或不属于主任务 '{parent_id}'" if parent_id else ""))
                 return False
             
             # 开启事务
@@ -948,38 +1030,63 @@ class EnhancedSchedulerDB(SchedulerDB):
             cursor.execute("DELETE FROM sub_task_executions WHERE task_id = ?", (task_id,))
             
             # 删除子任务
-            cursor.execute("DELETE FROM sub_tasks WHERE task_id = ?", (task_id,))
+            if parent_id:
+                cursor.execute("DELETE FROM sub_tasks WHERE task_id = ? AND parent_id = ?", (task_id, parent_id))
+            else:
+                cursor.execute("DELETE FROM sub_tasks WHERE task_id = ?", (task_id,))
             
             # 重新排序剩余子任务
-            cursor.execute("""
-            SELECT task_id, parent_id, sequence_number 
-            FROM sub_tasks 
-            ORDER BY parent_id, sequence_number
-            """)
-            subtasks = cursor.fetchall()
-            
-            # 按父任务分组
-            subtasks_by_parent = {}
-            for subtask in subtasks:
-                if subtask[1] not in subtasks_by_parent:
-                    subtasks_by_parent[subtask[1]] = []
-                subtasks_by_parent[subtask[1]].append(subtask)
-            
-            # 更新序号
-            for parent_id, tasks in subtasks_by_parent.items():
-                for i, task in enumerate(tasks, 1):
-                    if task[2] != i:  # 如果序号不匹配才更新
+            # 如果提供了parent_id，只重新排序该主任务下的子任务
+            if parent_id:
+                cursor.execute("""
+                SELECT task_id, sequence_number 
+                FROM sub_tasks 
+                WHERE parent_id = ?
+                ORDER BY sequence_number
+                """, (parent_id,))
+                subtasks = cursor.fetchall()
+                
+                # 更新序号
+                for i, task in enumerate(subtasks, 1):
+                    if task[1] != i:  # 如果序号不匹配才更新
                         cursor.execute("""
                         UPDATE sub_tasks SET sequence_number = ? WHERE task_id = ?
                         """, (i, task[0]))
+            else:
+                # 按父任务分组重新排序所有子任务
+                cursor.execute("""
+                SELECT task_id, parent_id, sequence_number 
+                FROM sub_tasks 
+                ORDER BY parent_id, sequence_number
+                """)
+                subtasks = cursor.fetchall()
+                
+                # 按父任务分组
+                subtasks_by_parent = {}
+                for subtask in subtasks:
+                    if subtask[1] not in subtasks_by_parent:
+                        subtasks_by_parent[subtask[1]] = []
+                    subtasks_by_parent[subtask[1]].append(subtask)
+                
+                # 更新序号
+                for parent_id, tasks in subtasks_by_parent.items():
+                    for i, task in enumerate(tasks, 1):
+                        if task[2] != i:  # 如果序号不匹配才更新
+                            cursor.execute("""
+                            UPDATE sub_tasks SET sequence_number = ? WHERE task_id = ?
+                            """, (i, task[0]))
             
             self.conn.commit()
-            logger.info(f"成功删除子任务 '{task_id}'")
+            logger.info(f"成功删除子任务 '{task_id}'" + (f" (主任务: {parent_id})" if parent_id else ""))
             return True
         except Exception as e:
             self.conn.rollback()
             logger.error(f"删除子任务失败: {str(e)}")
             return False
+    
+    def delete_sub_task(self, parent_id: str, task_id: str) -> bool:
+        """删除指定主任务下的特定子任务，确保ID相同时不会错删除主任务"""
+        return self.delete_subtask(task_id, parent_id)
     
     def reorder_subtasks(self, parent_id: str, task_order: List[str]) -> bool:
         """重新排序子任务"""
@@ -1173,29 +1280,79 @@ class EnhancedSchedulerDB(SchedulerDB):
             if next_run_time is None:
                 schedule_type = task_config.get('schedule_type') if task_config else None
                 
-                # 只有主任务且是daily类型时才计算下次执行时间
-                if not is_sub_task and schedule_type == 'daily':
-                    schedule_time = task_config.get('schedule_time')
-                    if schedule_time:
-                        try:
-                            current_dt = datetime.fromisoformat(start_time)
-                            schedule_parts = schedule_time.split(':')
-                            next_dt = current_dt.replace(
-                                hour=int(schedule_parts[0]),
-                                minute=int(schedule_parts[1]),
-                                second=0,
-                                microsecond=0
-                            )
-                            
-                            # 如果当前时间已经过了今天的调度时间，设置为明天
-                            if current_dt >= next_dt:
-                                next_dt = next_dt + timedelta(days=1)
-                            
-                            next_run_time = next_dt.strftime('%Y-%m-%d %H:%M:%S')
-                            logger.info(f"计算得到下次执行时间: {next_run_time}")
-                        except Exception as e:
-                            logger.error(f"计算下次执行时间失败: {str(e)}")
-                            next_run_time = None
+                # 只有主任务时才计算下次执行时间
+                if not is_sub_task:
+                    if schedule_type == 'daily':
+                        schedule_time = task_config.get('schedule_time')
+                        if schedule_time:
+                            try:
+                                current_dt = datetime.fromisoformat(start_time)
+                                schedule_parts = schedule_time.split(':')
+                                next_dt = current_dt.replace(
+                                    hour=int(schedule_parts[0]),
+                                    minute=int(schedule_parts[1]),
+                                    second=0,
+                                    microsecond=0
+                                )
+                                
+                                # 如果当前时间已经过了今天的调度时间，设置为明天
+                                if current_dt >= next_dt:
+                                    next_dt = next_dt + timedelta(days=1)
+                                
+                                next_run_time = next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                logger.info(f"计算得到下次执行时间: {next_run_time}")
+                            except Exception as e:
+                                logger.error(f"计算下次执行时间失败: {str(e)}")
+                                next_run_time = None
+                    elif schedule_type == 'interval':
+                        # 处理间隔任务
+                        interval_value = task_config.get('interval_value')
+                        interval_unit = task_config.get('interval_unit')
+                        
+                        if interval_value and interval_unit:
+                            try:
+                                current_dt = datetime.fromisoformat(start_time if end_time is None else end_time)
+                                
+                                # 根据间隔值和单位计算下次执行时间
+                                if interval_unit == 'minutes':
+                                    next_dt = current_dt + timedelta(minutes=interval_value)
+                                elif interval_unit == 'hours':
+                                    next_dt = current_dt + timedelta(hours=interval_value)
+                                elif interval_unit == 'days':
+                                    next_dt = current_dt + timedelta(days=interval_value)
+                                elif interval_unit == 'weeks':
+                                    next_dt = current_dt + timedelta(weeks=interval_value)
+                                elif interval_unit == 'months':
+                                    # 手动计算月份
+                                    year = current_dt.year
+                                    month = current_dt.month + interval_value
+                                    
+                                    # 处理月份溢出
+                                    while month > 12:
+                                        month -= 12
+                                        year += 1
+                                    
+                                    # 处理月份天数问题（例如，1月31日 + 1个月）
+                                    day = min(current_dt.day, calendar.monthrange(year, month)[1])
+                                    
+                                    next_dt = current_dt.replace(year=year, month=month, day=day)
+                                elif interval_unit == 'years':
+                                    # 处理闰年问题
+                                    year = current_dt.year + interval_value
+                                    month = current_dt.month
+                                    day = min(current_dt.day, calendar.monthrange(year, month)[1])
+                                    
+                                    next_dt = current_dt.replace(year=year, day=day)
+                                else:
+                                    logger.warning(f"不支持的间隔单位: {interval_unit}")
+                                    next_dt = None
+                                
+                                if next_dt:
+                                    next_run_time = next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                                    logger.info(f"计算得到间隔任务下次执行时间: {next_run_time}，间隔: {interval_value} {interval_unit}")
+                            except Exception as e:
+                                logger.error(f"计算间隔任务下次执行时间失败: {str(e)}")
+                                next_run_time = None
             
             # 根据任务类型选择表
             table_name = "sub_task_executions" if is_sub_task else "task_executions"
@@ -1343,3 +1500,133 @@ class EnhancedSchedulerDB(SchedulerDB):
             return None
             
         return next_run
+
+    def update_next_execution_time(self, task_id: str, next_run_time: Optional[str] = None):
+        """
+        更新任务的下次执行时间
+        
+        Args:
+            task_id: 任务ID
+            next_run_time: 下次执行时间，如果为None则自动计算
+        
+        Returns:
+            bool: 更新是否成功
+        """
+        try:
+            # 确定任务类型（主任务或子任务）
+            is_sub_task = not self.is_main_task(task_id)
+            
+            # 如果是子任务，不处理下次执行时间
+            if is_sub_task:
+                logger.warning(f"子任务 {task_id} 不支持更新下次执行时间")
+                return False
+            
+            # 获取任务配置
+            task_config = self.get_main_task_by_id(task_id)
+            if not task_config:
+                logger.error(f"任务 {task_id} 不存在")
+                return False
+            
+            # 如果没有提供 next_run_time，则计算它
+            if next_run_time is None:
+                schedule_type = task_config.get('schedule_type')
+                
+                if schedule_type == 'daily':
+                    schedule_time = task_config.get('schedule_time')
+                    if schedule_time:
+                        try:
+                            now = datetime.now()
+                            schedule_parts = schedule_time.split(':')
+                            next_dt = now.replace(
+                                hour=int(schedule_parts[0]),
+                                minute=int(schedule_parts[1]),
+                                second=0,
+                                microsecond=0
+                            )
+                            
+                            # 如果当前时间已经过了今天的调度时间，设置为明天
+                            if now >= next_dt:
+                                next_dt = next_dt + timedelta(days=1)
+                            
+                            next_run_time = next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                            logger.info(f"计算得到下次执行时间: {next_run_time}")
+                        except Exception as e:
+                            logger.error(f"计算下次执行时间失败: {str(e)}")
+                            return False
+                
+                elif schedule_type == 'interval':
+                    # 处理间隔任务
+                    interval_value = task_config.get('interval_value')
+                    interval_unit = task_config.get('interval_unit')
+                    
+                    if interval_value and interval_unit:
+                        try:
+                            now = datetime.now()
+                            
+                            # 根据间隔值和单位计算下次执行时间
+                            if interval_unit == 'minutes':
+                                next_dt = now + timedelta(minutes=interval_value)
+                            elif interval_unit == 'hours':
+                                next_dt = now + timedelta(hours=interval_value)
+                            elif interval_unit == 'days':
+                                next_dt = now + timedelta(days=interval_value)
+                            elif interval_unit == 'weeks':
+                                next_dt = now + timedelta(weeks=interval_value)
+                            elif interval_unit == 'months':
+                                # 手动计算月份
+                                year = now.year
+                                month = now.month + interval_value
+                                
+                                # 处理月份溢出
+                                while month > 12:
+                                    month -= 12
+                                    year += 1
+                                
+                                # 处理月份天数问题
+                                day = min(now.day, calendar.monthrange(year, month)[1])
+                                
+                                next_dt = now.replace(year=year, month=month, day=day)
+                            elif interval_unit == 'years':
+                                # 处理闰年问题
+                                year = now.year + interval_value
+                                month = now.month
+                                day = min(now.day, calendar.monthrange(year, month)[1])
+                                
+                                next_dt = now.replace(year=year, day=day)
+                            else:
+                                logger.warning(f"不支持的间隔单位: {interval_unit}")
+                                return False
+                            
+                            next_run_time = next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                            logger.info(f"计算得到间隔任务下次执行时间: {next_run_time}，间隔: {interval_value} {interval_unit}")
+                        except Exception as e:
+                            logger.error(f"计算间隔任务下次执行时间失败: {str(e)}")
+                            return False
+                else:
+                    logger.warning(f"任务 {task_id} 的计划类型 {schedule_type} 不支持自动计算下次执行时间")
+                    return False
+            
+            # 更新数据库中的下次执行时间
+            cursor = self.conn.cursor()
+            cursor.execute('''
+            UPDATE task_status
+            SET next_run_time = ?
+            WHERE task_id = ?
+            ''', (next_run_time, task_id))
+            
+            # 如果没有状态记录，创建一个新的
+            if cursor.rowcount == 0:
+                cursor.execute('''
+                INSERT INTO task_status
+                (task_id, next_run_time)
+                VALUES (?, ?)
+                ''', (task_id, next_run_time))
+            
+            self.conn.commit()
+            logger.info(f"成功更新任务 {task_id} 的下次执行时间: {next_run_time}")
+            return True
+            
+        except Exception as e:
+            self.conn.rollback()
+            logger.error(f"更新任务下次执行时间失败: {str(e)}")
+            return False

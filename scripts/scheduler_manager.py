@@ -3,7 +3,8 @@ import logging
 import os
 import sys
 import threading
-from datetime import datetime
+import calendar
+from datetime import datetime, timedelta
 from typing import Optional, List
 import traceback
 
@@ -541,6 +542,66 @@ class SchedulerManager:
                 )
                 thread.daemon = True
                 thread.start()
+            elif task.get('schedule_type') == 'interval':
+                # 获取任务的启用状态
+                task_status = self.db.get_task_status(task_name)
+                is_enabled = task.get('enabled', True)
+                if task_status and 'enabled' in task_status:
+                    is_enabled = bool(task_status['enabled'])
+                print(f"任务状态: {'启用' if is_enabled else '禁用'}")
+                
+                # 只调度启用的任务
+                if is_enabled:
+                    interval_value = task.get('interval_value')
+                    interval_unit = task.get('interval_unit')
+                    
+                    if not interval_value or not interval_unit:
+                        print(f"警告: 任务 {task_name} 没有设置有效的间隔值或单位")
+                        continue
+                    
+                    print(f"间隔设置: 每 {interval_value} {interval_unit}")
+                    
+                    # 使用schedule库设置任务
+                    try:
+                        print(f"正在设置interval调度任务...")
+                        
+                        # 根据interval_unit选择合适的调度方法
+                        job = None
+                        if interval_unit == 'minutes':
+                            job = schedule.every(interval_value).minutes.do(sync_execute_task, task_name)
+                        elif interval_unit == 'hours':
+                            job = schedule.every(interval_value).hours.do(sync_execute_task, task_name)
+                        elif interval_unit == 'days':
+                            job = schedule.every(interval_value).days.do(sync_execute_task, task_name)
+                        elif interval_unit == 'weeks':
+                            job = schedule.every(interval_value).weeks.do(sync_execute_task, task_name)
+                        else:
+                            print(f"警告: 不支持的间隔单位: {interval_unit}")
+                            continue
+                        
+                        # 验证任务是否已正确设置
+                        if job in schedule.jobs:
+                            print(f"间隔任务已成功添加到调度队列")
+                            print(f"任务详情: {job}")
+                            if hasattr(job, 'next_run'):
+                                next_run = job.next_run
+                                print(f"Schedule库计算的下次执行时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}")
+                                
+                                # 更新数据库中的下次执行时间
+                                next_run_str = next_run.strftime('%Y-%m-%d %H:%M:%S')
+                                self.db.update_task_status(task_name, {'next_run_time': next_run_str})
+                                
+                                # 计算距离现在的时间
+                                time_diff = (next_run - now).total_seconds() / 60
+                                print(f"距离现在: {time_diff:.1f} 分钟")
+                        else:
+                            print(f"警告: 间隔任务可能未成功添加到调度队列")
+                    except Exception as e:
+                        print(f"设置间隔任务调度失败: {str(e)}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print(f"间隔任务已禁用，跳过调度")
         
         # 打印最终的调度状态
         print("\n=== 当前调度状态 ===")
@@ -978,6 +1039,289 @@ class SchedulerManager:
             return True
         
         return False
+
+    def _check_scheduled_tasks(self):
+        """检查所有计划任务，执行到期的任务"""
+        try:
+            cursor = self.db.conn.cursor()
+            
+            # 获取所有启用的主任务
+            cursor.execute("""
+            SELECT task_id, name, endpoint, method, params, schedule_type, 
+                   schedule_time, schedule_delay, interval_value, interval_unit,
+                   last_executed, last_status
+            FROM main_tasks
+            WHERE enabled = 1 AND task_type = 'main'
+            """)
+            
+            tasks = cursor.fetchall()
+            current_time = datetime.now()
+            
+            for task in tasks:
+                task_id, name, endpoint, method, params, schedule_type, schedule_time, schedule_delay, interval_value, interval_unit, last_executed, last_status = task
+                
+                should_execute = False
+                
+                # 解析上次执行时间
+                if last_executed:
+                    try:
+                        last_exec_time = datetime.fromisoformat(last_executed)
+                    except ValueError:
+                        last_exec_time = None
+                else:
+                    last_exec_time = None
+                
+                # 检查是否应该执行
+                if schedule_type == 'daily':
+                    # 每日任务
+                    if schedule_time and not self._is_executed_today(task_id):
+                        scheduled_time = self._parse_schedule_time(schedule_time)
+                        if scheduled_time and current_time.time() >= scheduled_time:
+                            should_execute = True
+                            logger.info(f"每日任务 '{task_id}' 达到执行时间 {schedule_time}")
+                
+                elif schedule_type == 'once':
+                    # 一次性任务
+                    if not last_executed and schedule_delay is not None:
+                        # 任务还未执行且设置了延迟
+                        creation_time = self._get_task_creation_time(task_id)
+                        if creation_time:
+                            scheduled_time = creation_time + timedelta(seconds=schedule_delay)
+                            if current_time >= scheduled_time:
+                                should_execute = True
+                                logger.info(f"一次性任务 '{task_id}' 达到执行时间")
+                
+                elif schedule_type == 'interval':
+                    # 间隔执行任务
+                    if interval_value is not None and interval_unit and last_exec_time:
+                        # 计算下次执行时间
+                        next_exec_time = self._calculate_next_interval_execution(
+                            last_exec_time, interval_value, interval_unit
+                        )
+                        if current_time >= next_exec_time:
+                            should_execute = True
+                            logger.info(f"间隔任务 '{task_id}' 达到执行时间 (每 {interval_value} {interval_unit})")
+                    elif interval_value is not None and interval_unit and not last_exec_time:
+                        # 间隔任务还未执行过，查看是否设置了初始延迟
+                        if schedule_delay is not None:
+                            creation_time = self._get_task_creation_time(task_id)
+                            if creation_time:
+                                scheduled_time = creation_time + timedelta(seconds=schedule_delay)
+                                if current_time >= scheduled_time:
+                                    should_execute = True
+                                    logger.info(f"间隔任务 '{task_id}' 首次执行 (每 {interval_value} {interval_unit})")
+                        else:
+                            # 获取任务创建时间，从创建时间开始计算第一次执行时间
+                            creation_time = self._get_task_creation_time(task_id)
+                            if creation_time:
+                                # 使用创建时间作为基准计算下次执行时间
+                                next_exec_time = self._calculate_next_interval_execution(
+                                    creation_time, interval_value, interval_unit
+                                )
+                                if current_time >= next_exec_time:
+                                    should_execute = True
+                                    logger.info(f"间隔任务 '{task_id}' 首次执行时间到达 (每 {interval_value} {interval_unit})")
+                                else:
+                                    logger.info(f"间隔任务 '{task_id}' 等待首次执行时间 {next_exec_time}")
+                
+                # 执行任务
+                if should_execute:
+                    thread = threading.Thread(
+                        target=self._execute_task_wrapper,
+                        args=(task_id, name, endpoint, method, params),
+                        daemon=True
+                    )
+                    thread.start()
+                    
+            return True
+            
+        except Exception as e:
+            logger.error(f"检查计划任务出错: {str(e)}")
+            return False
+
+    def _calculate_next_interval_execution(self, last_exec_time, interval_value, interval_unit):
+        """计算间隔任务的下次执行时间"""
+        if not isinstance(interval_value, int) or interval_value <= 0:
+            logger.warning(f"无效的间隔值: {interval_value}")
+            return datetime.max  # 返回一个极远的未来时间，防止任务被执行
+        
+        try:
+            if interval_unit == 'minutes':
+                return last_exec_time + timedelta(minutes=interval_value)
+            elif interval_unit == 'hours':
+                return last_exec_time + timedelta(hours=interval_value)
+            elif interval_unit == 'days':
+                return last_exec_time + timedelta(days=interval_value)
+            elif interval_unit == 'weeks':
+                return last_exec_time + timedelta(weeks=interval_value)
+            elif interval_unit == 'months':
+                # Python的timedelta没有months，手动计算
+                year = last_exec_time.year
+                month = last_exec_time.month + interval_value
+                
+                # 处理月份溢出
+                while month > 12:
+                    month -= 12
+                    year += 1
+                
+                # 处理月份天数问题（例如，1月31日 + 1个月）
+                day = min(last_exec_time.day, calendar.monthrange(year, month)[1])
+                
+                return last_exec_time.replace(year=year, month=month, day=day)
+            elif interval_unit == 'years':
+                # 处理闰年问题
+                year = last_exec_time.year + interval_value
+                month = last_exec_time.month
+                day = min(last_exec_time.day, calendar.monthrange(year, month)[1])
+                
+                return last_exec_time.replace(year=year, day=day)
+            else:
+                logger.warning(f"不支持的间隔单位: {interval_unit}")
+                return datetime.max
+                
+        except Exception as e:
+            logger.error(f"计算下次执行时间出错: {str(e)}")
+            return datetime.max
+
+    def _get_task_creation_time(self, task_id: str) -> Optional[datetime]:
+        """获取任务的创建时间"""
+        try:
+            cursor = self.db.conn.cursor()
+            cursor.execute("SELECT created_at FROM main_tasks WHERE task_id = ?", (task_id,))
+            row = cursor.fetchone()
+            
+            if row and row[0]:
+                try:
+                    # 尝试解析ISO格式的时间字符串
+                    return datetime.fromisoformat(row[0].replace('Z', '+00:00'))
+                except ValueError:
+                    # 如果不是ISO格式，尝试其他格式
+                    formats = [
+                        '%Y-%m-%d %H:%M:%S',
+                        '%Y-%m-%dT%H:%M:%S',
+                        '%Y-%m-%d %H:%M:%S.%f'
+                    ]
+                    
+                    for fmt in formats:
+                        try:
+                            return datetime.strptime(row[0], fmt)
+                        except ValueError:
+                            continue
+                    
+                    # 如果所有格式都不匹配，记录错误并返回当前时间
+                    logger.error(f"无法解析任务 {task_id} 的创建时间: {row[0]}")
+                    return datetime.now()
+            else:
+                logger.warning(f"未找到任务 {task_id} 的创建时间，使用当前时间")
+                return datetime.now()
+                
+        except Exception as e:
+            logger.error(f"获取任务创建时间出错: {str(e)}")
+            return datetime.now()
+
+    def _execute_task_wrapper(self, task_id, name, endpoint, method, params):
+        """执行任务并更新下次执行时间（针对计划任务）"""
+        print(f"\n=== 执行计划任务: {task_id} ===")
+        print(f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"任务名称: {name}")
+        print(f"接口: {method} {endpoint}")
+        
+        try:
+            # 记录任务开始执行
+            start_time = datetime.now()
+            start_time_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+            
+            # 获取任务配置，特别是计划类型
+            task_config = self.db.get_main_task_by_id(task_id)
+            if not task_config:
+                print(f"错误: 任务 {task_id} 不存在")
+                return
+            
+            schedule_type = task_config.get('schedule_type')
+            
+            # 执行任务
+            try:
+                # 使用异步方式执行任务
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                task = loop.create_task(self.execute_task_chain(task_id))
+                result = loop.run_until_complete(asyncio.gather(task))[0]
+                loop.close()
+                
+                # 记录执行结果
+                end_time = datetime.now()
+                end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+                duration = (end_time - start_time).total_seconds()
+                
+                # 为interval类型的任务计算下次执行时间
+                next_run_time = None
+                if schedule_type == 'interval':
+                    interval_value = task_config.get('interval_value')
+                    interval_unit = task_config.get('interval_unit')
+                    
+                    if interval_value and interval_unit:
+                        try:
+                            # 使用end_time计算下次执行时间
+                            next_exec_time = self._calculate_next_interval_execution(
+                                end_time, interval_value, interval_unit
+                            )
+                            next_run_time = next_exec_time.strftime('%Y-%m-%d %H:%M:%S')
+                            logger.info(f"计算得到间隔任务下次执行时间: {next_run_time}")
+                            
+                            # 更新数据库中的下次执行时间
+                            self.db.update_task_status(task_id, {'next_run_time': next_run_time})
+                            print(f"已更新任务 {task_id} 的下次执行时间: {next_run_time}")
+                        except Exception as e:
+                            logger.error(f"计算间隔任务下次执行时间失败: {str(e)}")
+                
+                print(f"任务执行{'成功' if result else '失败'}")
+                
+                # 记录成功的执行结果
+                if result:
+                    self.db.record_task_execution_enhanced(
+                        task_id=task_id,
+                        start_time=start_time_str,
+                        end_time=end_time_str,
+                        duration=duration,
+                        status="success",
+                        triggered_by="scheduler",
+                        next_run_time=next_run_time
+                    )
+                else:
+                    self.db.record_task_execution_enhanced(
+                        task_id=task_id,
+                        start_time=start_time_str,
+                        end_time=end_time_str,
+                        duration=duration,
+                        status="fail",
+                        error_message="任务执行失败",
+                        triggered_by="scheduler",
+                        next_run_time=next_run_time
+                    )
+                
+            except Exception as e:
+                error_msg = str(e)
+                print(f"执行任务时出错: {error_msg}")
+                traceback.print_exc()
+                
+                # 记录执行失败
+                end_time = datetime.now()
+                end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+                duration = (end_time - start_time).total_seconds()
+                
+                self.db.record_task_execution_enhanced(
+                    task_id=task_id,
+                    start_time=start_time_str,
+                    end_time=end_time_str,
+                    duration=duration,
+                    status="fail",
+                    error_message=error_msg,
+                    triggered_by="scheduler"
+                )
+                
+        except Exception as e:
+            print(f"执行任务包装器出错: {str(e)}")
+            traceback.print_exc()
 
 async def send_error_notification(error_message):
     """发送错误通知邮件"""
