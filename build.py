@@ -482,6 +482,9 @@ def cleanup_sensitive_config():
         # 敏感字段路径列表和对应的示例值
         sensitive_fields = {
             "SESSDATA": "你的SESSDATA",
+            "bili_jct": "你的bili_jct",
+            "DedeUserID": "你的DedeUserID",
+            "DedeUserID__ckMd5": "你的DedeUserID__ckMd5",
             "email.password": "你的邮箱授权码",
             "email.sender": "example@example.com",
             "email.receiver": "example@example.com",
@@ -491,7 +494,7 @@ def cleanup_sensitive_config():
         }
         
         # 将一些独立的顶级字段也加入检查
-        for field in ['SESSDATA', 'email', 'ssl_certfile', 'ssl_keyfile', 'api_key']:
+        for field in ['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ckMd5', 'email', 'ssl_certfile', 'ssl_keyfile', 'api_key']:
             if field in config and not isinstance(config[field], dict) and field not in sensitive_fields:
                 sensitive_fields[field] = f"你的{field}"
         
