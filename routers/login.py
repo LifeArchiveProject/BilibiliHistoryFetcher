@@ -6,6 +6,7 @@ import requests
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from scripts.utils import load_config, get_output_path
+import logging
 
 router = APIRouter()
 
@@ -409,7 +410,7 @@ async def check_login_status():
     """检查当前登录状态"""
     try:
         print("检查登录状态...")
-        
+
         # 每次检查时重新加载配置
         current_config = get_current_config()
         
@@ -418,11 +419,10 @@ async def check_login_status():
             return JSONResponse(
                 status_code=200,
                 content={
-                    "status": "success",
-                    "data": {
-                        "is_logged_in": False,
-                        "message": "未登录"
-                    }
+                    "code": -101,
+                    "message": "未登录",
+                    "ttl": 1,
+                    "data": None
                 }
             )
         
@@ -440,71 +440,11 @@ async def check_login_status():
         )
         
         print(f"API响应状态码: {response.status_code}")
-        print(f"API响应内容: {response.text}")
         
-        data = response.json()
-        
-        if data.get('code') != 0:
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "status": "success",
-                    "data": {
-                        "is_logged_in": False,
-                        "message": "登录已失效"
-                    }
-                }
-            )
-        
-        user_data = data.get('data', {})
-        level_info = user_data.get('level_info', {})
-        official = user_data.get('official', {})
-        vip = user_data.get('vip', {})
-        wallet = user_data.get('wallet', {})
-        
+        # 直接返回B站API的原始响应数据
         return JSONResponse(
             status_code=200,
-            content={
-                "status": "success",
-                "data": {
-                    "is_logged_in": True,
-                    "message": "已登录",
-                    "user_info": {
-                        "uid": user_data.get('mid'),
-                        "uname": user_data.get('uname'),
-                        "face": user_data.get('face'),
-                        "sign": user_data.get('sign'),
-                        "level": level_info.get('current_level'),
-                        "current_exp": level_info.get('current_exp'),
-                        "next_exp": level_info.get('next_exp'),
-                        "coins": wallet.get('coins'),
-                        "bcoins": wallet.get('bcoin_balance'),
-                        "vip": {
-                            "type": vip.get('type'),
-                            "status": vip.get('status'),
-                            "due_date": vip.get('due_date'),
-                            "label": vip.get('label', {}).get('text'),
-                            "nickname_color": vip.get('nickname_color')
-                        },
-                        "official": {
-                            "role": official.get('role'),
-                            "title": official.get('title'),
-                            "desc": official.get('desc'),
-                            "type": official.get('type')
-                        },
-                        "email_verified": user_data.get('email_verified'),
-                        "mobile_verified": user_data.get('mobile_verified'),
-                        "moral": user_data.get('moral'),
-                        "scores": user_data.get('scores'),
-                        "has_shop": user_data.get('has_shop'),
-                        "shop_url": user_data.get('shop_url'),
-                        "allowance_count": user_data.get('allowance_count'),
-                        "answer_status": user_data.get('answer_status'),
-                        "is_senior_member": user_data.get('is_senior_member'),
-                        "is_jury": user_data.get('is_jury')
-                    }
-                }
-            }
+            content=response.json()
         )
         
     except Exception as e:

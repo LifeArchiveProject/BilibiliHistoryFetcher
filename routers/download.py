@@ -10,6 +10,8 @@ import requests
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
+import httpx
+import json
 
 from scripts.utils import load_config
 
@@ -1821,98 +1823,123 @@ class VideoDetailResponse(BaseModel):
     data: Optional[dict] = None
     
 @router.get("/video_info", summary="获取 B 站视频详细信息")
-async def get_video_info(aid: Optional[int] = None, bvid: Optional[str] = None, sessdata: Optional[str] = None):
+async def get_video_info(aid: Optional[int] = None, bvid: Optional[str] = None, sessdata: Optional[str] = None, headers: Optional[dict] = None):
     """
-    获取 B 站视频的详细信息
+    获取B站视频详细信息
     
     Args:
-        aid: 可选，视频的 avid
-        bvid: 可选，视频的 bvid
-        sessdata: 可选，用户的 SESSDATA，用于获取限制观看的视频
-    
-    Returns:
-        视频详细信息
+        aid: 视频aid
+        bvid: 视频bvid
+        sessdata: B站会话ID
+        headers: 自定义请求头
     """
     try:
-        # 检查参数是否有效
         if not aid and not bvid:
             return VideoDetailResponse(
                 status="error",
-                message="必须提供 aid 或 bvid 参数中的至少一个"
+                message="至少需要提供aid或bvid参数",
+                data=None
             )
-            
-        # 设置请求头
-        headers = {
+        
+        # 配置请求信息
+        default_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Content-Type': 'application/json; charset=utf-8'
+            'Referer': 'https://www.bilibili.com',
         }
         
-        # 如果提供了 SESSDATA，添加到请求头中
+        # 合并自定义请求头
+        if headers:
+            default_headers.update(headers)
+        
+        # 如果存在SESSDATA，加入到请求头中
         if sessdata:
-            headers['Cookie'] = f'SESSDATA={sessdata}'
-        elif config.get('SESSDATA'):
-            headers['Cookie'] = f'SESSDATA={config["SESSDATA"]}'
-            
-        # 构建请求参数 - 确保 URL 编码正确
-        url = 'https://api.bilibili.com/x/web-interface/view'
+            default_headers['Cookie'] = f'SESSDATA={sessdata};'
         
+        # 准备请求参数
+        params = {}
         if aid:
-            url += f"?aid={aid}"
-        elif bvid:
-            # 对 bvid 进行 URL 编码，防止特殊字符引起问题
-            import urllib.parse
-            encoded_bvid = urllib.parse.quote(bvid)
-            url += f"?bvid={encoded_bvid}"
+            params['aid'] = aid
+        if bvid:
+            params['bvid'] = bvid
+        
+        url = "https://api.bilibili.com/x/web-interface/view"
+        
+        # 使用httpx发送请求
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, headers=default_headers, timeout=20.0)
             
-        # 发送请求获取视频信息 - 不使用 params 参数，直接在 URL 中构建
-        print(f"请求 URL: {url}")
-        print(f"请求头：{headers}")
-        
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=10
-        )
-        
-        # 显式设置响应编码
-        response.encoding = 'utf-8'
-        
-        # 打印响应状态和内容预览，便于调试
-        print(f"响应状态码：{response.status_code}")
-        content_preview = response.text[:100] if len(response.text) > 100 else response.text
-        print(f"响应内容预览：{content_preview}")
-        
-        # 解析响应
-        response_json = response.json()
-        
-        # 处理可能的错误
-        if response_json.get('code') != 0:
+            # 首先检查内容类型
+            content_type = response.headers.get('content-type', '')
+            if 'application/json' not in content_type:
+                return VideoDetailResponse(
+                    status="error",
+                    message=f"非JSON响应: {content_type}，视频可能无法访问",
+                    data=None
+                )
+            
+            # 尝试多种解码方式
+            content = None
+            for encoding in ['utf-8', 'gbk', 'gb2312', 'utf-16', 'latin1']:
+                try:
+                    content = response.content.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            # 如果所有解码方式都失败，使用bytes的十六进制表示
+            if content is None:
+                hex_content = response.content.hex()
+                return VideoDetailResponse(
+                    status="error",
+                    message=f"无法解码响应内容，可能是非文本数据",
+                    data={"raw_hex": hex_content[:100] + "..."}
+                )
+            
+            # 尝试解析JSON
+            try:
+                response_json = json.loads(content)
+            except json.JSONDecodeError:
+                return VideoDetailResponse(
+                    status="error",
+                    message=f"无法解析JSON: {content[:200]}...",
+                    data=None
+                )
+            
+            # 检查是否API错误
+            code = response_json.get('code', 0)
+            if code != 0:
+                error_msg = response_json.get('message', '未知错误')
+                
+                # 特殊处理一些常见错误
+                if code == -404:
+                    error_msg = "视频不存在或已被删除"
+                elif code == 62002:
+                    error_msg = "视频不可见（可能是私有或被删除）"
+                
+                return VideoDetailResponse(
+                    status="error",
+                    message=f"API错误 {code}: {error_msg}",
+                    data=response_json
+                )
+            
+            # 正常返回
             return VideoDetailResponse(
-                status="error",
-                message=f"获取视频信息失败：{response_json.get('message', '未知错误')}",
-                data=response_json
+                status="success",
+                message="获取视频信息成功",
+                data=response_json.get('data', {})
             )
-            
-        # 返回成功响应
+    
+    except httpx.RequestError as e:
         return VideoDetailResponse(
-            status="success",
-            message="获取视频信息成功",
-            data=response_json.get('data')
+            status="error",
+            message=f"请求错误: {str(e)}",
+            data=None
         )
-            
     except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"获取视频信息时出错：{str(e)}")
-        print(f"错误堆栈：{error_trace}")
-        
         return VideoDetailResponse(
             status="error",
             message=f"获取视频信息时出错：{str(e)}",
-            data={"error_trace": error_trace}
+            data=None
         )
 
 # 用户投稿视频查询参数模型

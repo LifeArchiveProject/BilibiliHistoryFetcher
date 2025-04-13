@@ -847,12 +847,27 @@ class SchedulerManager:
             try:
                 # 创建任务并等待其完成
                 if loop.is_running():
-                    # 如果循环已经在运行，使用asyncio.run_coroutine_threadsafe
-                    future = asyncio.run_coroutine_threadsafe(
-                        self.execute_task_chain(task_name), 
-                        loop
-                    )
-                    result = future.result()
+                    try:
+                        # 如果循环已经在运行，使用asyncio.run_coroutine_threadsafe
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.execute_task_chain(task_name), 
+                            loop
+                        )
+                        result = future.result()
+                    except RuntimeError as re:
+                        # 处理"This event loop is already running"错误
+                        if "This event loop is already running" in str(re):
+                            print(f"执行任务时发生事件循环错误: {str(re)}，任务将被跳过")
+                            # 记录错误
+                            self._record_task_failure(
+                                task_name, 
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                f"事件循环错误: {str(re)}", 
+                                "scheduler"
+                            )
+                            return False
+                        else:
+                            raise  # 重新引发其他RuntimeError
                 else:
                     # 如果循环未运行，正常执行
                     task = asyncio.ensure_future(self.execute_task_chain(task_name), loop=loop)
