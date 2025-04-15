@@ -198,6 +198,16 @@ async def lifespan(app: FastAPI):
         # 初始化调度器
         scheduler_manager = SchedulerManager.get_instance(app)
         
+        # 显示调度器配置
+        print(f"调度器配置:")
+        print(f"  基础URL: {scheduler_manager.base_url}")
+        print(f"  (从 config/config.yaml 的 server 配置生成)")
+        
+        # 检查基础URL是否包含协议前缀
+        if not scheduler_manager.base_url.startswith(('http://', 'https://')):
+            print(f"  警告: 基础URL不包含协议前缀，这可能导致任务执行错误")
+            print(f"  建议: 检查服务器配置确保正确构建URL")
+        
         # 创建异步任务运行调度器
         scheduler_task = asyncio.create_task(scheduler_manager.run_scheduler())
         

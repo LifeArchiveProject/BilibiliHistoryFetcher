@@ -48,13 +48,22 @@ class SchedulerManager:
         self.is_running = False
         self.log_capture = None
         self.current_log_file = None
-        # 移除默认值，确保配置必须从配置文件中读取
-        self.base_url = None
+        
+        # 从config.yaml读取服务器配置
+        config = load_config()
+        server_config = config.get('server', {})
+        host = server_config.get('host', '0.0.0.0')
+        port = server_config.get('port', 8899)
+        
+        # 根据服务器配置构建base_url
+        self.base_url = f"http://{host}:{port}"
+        print(f"从主配置文件读取服务器配置: {host}:{port}")
+        print(f"设置base_url为: {self.base_url}")
         
         # 获取增强版数据库实例
         self.db = EnhancedSchedulerDB.get_instance()
         
-        # 加载配置（会设置self.base_url）
+        # 加载调度器配置（不再从这里获取base_url）
         self.load_scheduler_config()
         self._initialized = True  # 标记为已初始化
 
@@ -66,15 +75,14 @@ class SchedulerManager:
             
             if not os.path.exists(config_file):
                 logger.warning(f"调度器配置文件不存在: {config_file}")
+                # 不再输出base_url相关日志，因为base_url已从主配置文件中读取
                 return
             
             with open(config_file, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
             
-            # 提取基础URL
-            if 'base_url' in config:
-                self.base_url = config['base_url']
-                logger.info(f"设置基础URL: {self.base_url}")
+            # 不再从scheduler_config.yaml读取base_url
+            # base_url已在__init__方法中从主配置文件读取
             
             # 处理错误处理配置
             if 'error_handling' in config:
@@ -901,7 +909,20 @@ class SchedulerManager:
                 self._record_task_failure(task_id, start_time_str, "任务不存在", triggered_by)
                 return False
             
-            url = f"{self.base_url}{task['endpoint']}"
+            # 确保base_url有协议前缀
+            base_url = self.base_url
+            if not base_url.startswith(('http://', 'https://')):
+                base_url = f"http://{base_url}"
+                print(f"警告: base_url未包含协议前缀，已自动添加http://前缀")
+            
+            # 构建完整URL
+            endpoint = task['endpoint']
+            if endpoint.startswith('/'):
+                url = f"{base_url}{endpoint}"
+            else:
+                url = f"{base_url}/{endpoint}"
+            
+            print(f"请求URL: {url}")
             method = task.get('method', 'GET').upper()
             params = task.get('params', {})
             timeout = task.get('timeout', 300)
