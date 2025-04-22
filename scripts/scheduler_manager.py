@@ -119,6 +119,15 @@ class SchedulerManager:
                     schedule_time = schedule_config.get('time') if schedule_type == 'daily' else None
                     schedule_delay = schedule_config.get('delay') if schedule_type == 'once' else None
                     
+                    # 获取interval类型的特殊配置
+                    interval_value = None
+                    interval_unit = None
+                    if schedule_type == 'interval':
+                        # 优先使用interval_value和interval_unit，其次使用value和unit
+                        interval_value = schedule_config.get('interval_value', schedule_config.get('value'))
+                        interval_unit = schedule_config.get('interval_unit', schedule_config.get('unit'))
+                        print(f"从配置文件读取间隔任务: {task_id}, 间隔值={interval_value}, 单位={interval_unit}")
+                    
                     # 判断是否为主任务或子任务
                     task_type = 'main'  # 默认为主任务
                     parent_id = None
@@ -139,9 +148,11 @@ class SchedulerManager:
                         'schedule_type': schedule_type,
                         'schedule_time': schedule_time,
                         'schedule_delay': schedule_delay,
+                        'interval_value': interval_value,
+                        'interval_unit': interval_unit,
                         'enabled': True
                     }
-                    
+
                     self.db.create_main_task(task_id, task_data)
                     
                     # 添加依赖关系

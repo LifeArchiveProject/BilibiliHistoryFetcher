@@ -8,6 +8,22 @@ scheduler:
     delay: 60
     max_attempts: 3
 tasks:
+  # 每10分钟抓取B站热门视频
+  fetch_popular_videos:
+    endpoint: /bilibili/popular/all
+    method: GET
+    name: 获取B站热门视频
+    params:
+      size: 20
+      max_pages: 100
+      save_to_db: true
+      include_videos: false
+    requires: []
+    schedule:
+      type: interval
+      interval_value: 10
+      interval_unit: minutes
+
   # 1. 无依赖的基础任务
   fetch_history:
     endpoint: /fetch/bili-history

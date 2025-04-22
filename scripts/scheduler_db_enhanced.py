@@ -1,3 +1,4 @@
+import calendar
 import json
 import logging
 import os
@@ -5,10 +6,8 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-import calendar
 
 import yaml
-from dateutil.relativedelta import relativedelta
 
 from scripts.scheduler_db import SchedulerDB
 
@@ -234,33 +233,36 @@ class EnhancedSchedulerDB(SchedulerDB):
             # 导入主任务
             for task_id, task_data in main_tasks.items():
                 schedule_info = task_data.get('schedule', {})
-                main_task = {
-                    'task_id': task_id,
-                    'name': task_data.get('name', task_id),
-                    'endpoint': task_data.get('endpoint', ''),
-                    'method': task_data.get('method', 'GET'),
-                    'params': json.dumps(task_data.get('params', {})),
-                    'schedule_type': schedule_info.get('type', 'daily'),
-                    'schedule_time': schedule_info.get('time'),
-                    'schedule_delay': schedule_info.get('delay'),
-                    'enabled': 1
-                }
+                
+                # 处理interval类型任务的特殊字段
+                interval_value = None
+                interval_unit = None
+                schedule_type = schedule_info.get('type', 'daily')
+                
+                if schedule_type == 'interval':
+                    # 优先使用interval_value和interval_unit，其次使用value和unit
+                    interval_value = schedule_info.get('interval_value', schedule_info.get('value'))
+                    interval_unit = schedule_info.get('interval_unit', schedule_info.get('unit'))
+                    print(f"任务 {task_id}: 间隔值 = {interval_value}, 间隔单位 = {interval_unit}")
                 
                 # 插入主任务
                 cursor.execute("""
                 INSERT INTO main_tasks (
                     task_id, name, endpoint, method, params, schedule_type, 
-                    schedule_time, schedule_delay, enabled, task_type, last_modified
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    schedule_time, schedule_delay, interval_value, interval_unit, 
+                    enabled, task_type, last_modified
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     task_id,
                     task_data.get('name', task_id),
                     task_data.get('endpoint', ''),
                     task_data.get('method', 'GET'),
                     json.dumps(task_data.get('params', {})),
-                    schedule_info.get('type', 'daily'),
+                    schedule_type,
                     schedule_info.get('time'),
                     schedule_info.get('delay'),
+                    interval_value,
+                    interval_unit,
                     task_data.get('enabled', 1),
                     'main',
                     datetime.now().isoformat()
@@ -1478,22 +1480,67 @@ class EnhancedSchedulerDB(SchedulerDB):
                 next_run += timedelta(days=1)
                 
         elif schedule_type == 'interval':
-            interval = task_data.get('interval', 1)
-            unit = task_data.get('unit', 'hours')
+            # 优先使用interval_value和interval_unit字段，如果不存在则尝试使用interval和unit字段
+            interval_value = task_data.get('interval_value', task_data.get('interval'))
+            interval_unit = task_data.get('interval_unit', task_data.get('unit'))
             
-            if unit == 'minutes':
-                next_run = now + timedelta(minutes=interval)
-            elif unit == 'hours':
-                next_run = now + timedelta(hours=interval)
-            elif unit == 'days':
-                next_run = now + timedelta(days=interval)
-            elif unit == 'months':
-                next_run = now + relativedelta(months=interval)
-            elif unit == 'years':
-                next_run = now + relativedelta(years=interval)
-            else:
+            if not interval_value:
+                logger.error(f"间隔任务缺少间隔值: {task_data}")
                 return None
                 
+            if not interval_unit:
+                logger.error(f"间隔任务缺少间隔单位: {task_data}")
+                return None
+                
+            logger.info(f"计算间隔任务下次执行时间: 间隔值={interval_value}, 单位={interval_unit}")
+            
+            if interval_value and interval_unit:
+                try:
+                    now = datetime.now()
+                    
+                    # 根据间隔值和单位计算下次执行时间
+                    if interval_unit == 'minutes':
+                        next_dt = now + timedelta(minutes=interval_value)
+                    elif interval_unit == 'hours':
+                        next_dt = now + timedelta(hours=interval_value)
+                    elif interval_unit == 'days':
+                        next_dt = now + timedelta(days=interval_value)
+                    elif interval_unit == 'weeks':
+                        next_dt = now + timedelta(weeks=interval_value)
+                    elif interval_unit == 'months':
+                        # 手动计算月份
+                        year = now.year
+                        month = now.month + interval_value
+                        
+                        # 处理月份溢出
+                        while month > 12:
+                            month -= 12
+                            year += 1
+                        
+                        # 处理月份天数问题
+                        day = min(now.day, calendar.monthrange(year, month)[1])
+                        
+                        next_dt = now.replace(year=year, month=month, day=day)
+                    elif interval_unit == 'years':
+                        # 处理闰年问题
+                        year = now.year + interval_value
+                        month = now.month
+                        day = min(now.day, calendar.monthrange(year, month)[1])
+                        
+                        next_dt = now.replace(year=year, day=day)
+                    else:
+                        logger.warning(f"不支持的间隔单位: {interval_unit}")
+                        return None
+                    
+                    next_run_time = next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    logger.info(f"计算得到间隔任务下次执行时间: {next_run_time}，间隔: {interval_value} {interval_unit}")
+                    return next_dt
+                except Exception as e:
+                    logger.error(f"计算间隔任务下次执行时间失败: {str(e)}")
+                    return None
+            else:
+                logger.error(f"间隔任务缺少必要参数: interval_value={interval_value}, interval_unit={interval_unit}")
+                return None
         elif schedule_type == 'once':
             delay = task_data.get('delay', 0)
             next_run = now + timedelta(seconds=delay)
@@ -1561,6 +1608,17 @@ class EnhancedSchedulerDB(SchedulerDB):
                     interval_value = task_config.get('interval_value')
                     interval_unit = task_config.get('interval_unit')
                     
+                    # 如果interval_value和interval_unit不存在，尝试使用旧的字段名
+                    if interval_value is None:
+                        interval_value = task_config.get('interval')
+                        logger.info(f"使用旧的interval字段: {interval_value}")
+                        
+                    if interval_unit is None:
+                        interval_unit = task_config.get('unit')
+                        logger.info(f"使用旧的unit字段: {interval_unit}")
+                    
+                    logger.info(f"准备计算间隔任务时间: 任务={task_id}, 间隔值={interval_value}, 单位={interval_unit}")
+                    
                     if interval_value and interval_unit:
                         try:
                             now = datetime.now()
@@ -1604,6 +1662,9 @@ class EnhancedSchedulerDB(SchedulerDB):
                         except Exception as e:
                             logger.error(f"计算间隔任务下次执行时间失败: {str(e)}")
                             return False
+                    else:
+                        logger.error(f"间隔任务缺少必要参数: interval_value={interval_value}, interval_unit={interval_unit}")
+                        return False
                 else:
                     logger.warning(f"任务 {task_id} 的计划类型 {schedule_type} 不支持自动计算下次执行时间")
                     return False
