@@ -1,0 +1,39 @@
+version: '3'
+
+services:
+  # 后端服务
+  backend:
+    image: bilibili-api:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.cuda
+    container_name: bilibili-history-backend
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config
+      - ./output:/app/output
+    ports:
+      - "8899:8899"
+    environment:
+      - TZ=Asia/Shanghai
+
+  # 前端服务
+  frontend:
+    image: bilibili-frontend:latest
+    build:
+      context: https://github.com/2977094657/BiliHistoryFrontend.git
+      dockerfile: Dockerfile
+    container_name: bilibili-history-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_URL=http://backend:8899
+      - TZ=Asia/Shanghai
+
+networks:
+  default:
+    name: bilibili-network
+    driver: bridge 

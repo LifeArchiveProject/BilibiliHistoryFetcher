@@ -55,6 +55,49 @@
    - `./config:/app/config`：配置文件目录，用于存储 SESSDATA 和其他配置
    - `./output:/app/output`：输出目录，用于存储下载的视频、图片和生成的数据
 
+#### 使用 Docker Compose 部署
+
+本项目提供了Docker Compose配置，实现一键部署前后端服务，您只需要一个`docker-compose.yml`文件即可完成整个部署，无需手动构建镜像。
+
+1. 确保已安装 [Docker](https://docs.docker.com/get-started/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)
+
+2. 下载`docker-compose.yml`文件：
+   - 直接从[这里](https://raw.githubusercontent.com/2977094657/BilibiliHistoryFetcher/master/docker-compose.yml)下载
+   - 或使用以下命令下载：
+     ```bash
+     curl -O https://raw.githubusercontent.com/2977094657/BilibiliHistoryFetcher/master/docker-compose.yml
+     # 或
+     wget https://raw.githubusercontent.com/2977094657/BilibiliHistoryFetcher/master/docker-compose.yml
+     ```
+
+3. 使用Docker Compose启动服务：
+   ```bash
+   docker-compose up -d
+   ```
+
+4. 服务启动后访问：
+   - 前端界面：http://localhost:5173
+   - 后端API：http://localhost:8899
+   - API文档：http://localhost:8899/docs
+
+5. 管理Docker Compose服务：
+   ```bash
+   # 查看服务状态
+   docker-compose ps
+   
+   # 查看日志
+   docker-compose logs -f
+   
+   # 停止服务
+   docker-compose stop
+   
+   # 重启服务
+   docker-compose restart
+   
+   # 重新构建并启动服务
+   docker-compose up -d --build
+   ```
+
 #### 使用 uv 安装 由 [@eli-yip](https://github.com/eli-yip) 实现 ([#30](https://github.com/2977094657/BilibiliHistoryFetcher/pull/30))
 
 1. 安装 [uv](https://docs.astral.sh/uv/getting-started/installation/)
