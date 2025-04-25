@@ -1,9 +1,7 @@
-import os
 import platform
-import psutil
-import logging
 
-logger = logging.getLogger(__name__)
+import psutil
+from loguru import logger
 
 # 最小资源要求
 MIN_MEMORY_GB = 4  # 最小内存要求（GB）

@@ -1,4 +1,3 @@
-import logging
 import os
 import sqlite3
 import sys
@@ -6,6 +5,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 import yaml
+from loguru import logger
 
 
 def get_base_path() -> str:
@@ -41,13 +41,13 @@ def load_config() -> Dict[str, Any]:
         if not os.path.exists(config_path):
             # 打印更多调试信息
             base_path = get_base_path()
-            print(f"\n=== 配置文件信息 ===")
-            print(f"当前基础路径: {base_path}")
-            print(f"尝试加载配置文件: {config_path}")
-            print(f"当前目录内容: {os.listdir(base_path)}")
+            logger.debug(f"\n=== 配置文件信息 ===")
+            logger.debug(f"当前基础路径: {base_path}")
+            logger.debug(f"尝试加载配置文件: {config_path}")
+            logger.debug(f"当前目录内容: {os.listdir(base_path)}")
             if os.path.exists(os.path.dirname(config_path)):
-                print(f"配置目录内容: {os.listdir(os.path.dirname(config_path))}")
-            print("=====================\n")
+                logger.debug(f"配置目录内容: {os.listdir(os.path.dirname(config_path))}")
+            logger.debug("=====================\n")
             raise FileNotFoundError(f"配置文件不存在: {config_path}")
 
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -63,7 +63,7 @@ def load_config() -> Dict[str, Any]:
 
         return config
     except Exception as e:
-        logging.error(f"加载配置文件失败: {str(e)}")
+        logger.error(f"加载配置文件失败: {str(e)}")
         raise
 
 def get_output_path(*paths: str) -> str:

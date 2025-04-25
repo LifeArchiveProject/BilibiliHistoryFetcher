@@ -3,6 +3,7 @@ import sys
 from multiprocessing import freeze_support
 
 import uvicorn
+from loguru import logger
 
 
 def main():
@@ -26,11 +27,11 @@ def main():
             sys.path.insert(0, base_path)
         
         # 打印当前环境信息
-        print("\n=== 环境信息 ===")
-        print(f"当前工作目录: {os.getcwd()}")
-        print(f"可执行文件目录: {os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else '非打包环境'}")
-        print(f"Python 路径: {sys.path}")
-        print(f"是否为打包环境: {getattr(sys, 'frozen', False)}")
+        logger.info("\n=== 环境信息 ===")
+        logger.info(f"当前工作目录: {os.getcwd()}")
+        logger.info(f"可执行文件目录: {os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else '非打包环境'}")
+        logger.info(f"Python 路径: {sys.path}")
+        logger.info(f"是否为打包环境: {getattr(sys, 'frozen', False)}")
         
         # 检查各个重要目录和文件
         important_items = [
@@ -41,23 +42,23 @@ def main():
             ('output目录', os.path.join(base_path, 'output')),
         ]
         
-        print("\n=== 目录和文件检查 ===")
+        logger.info("\n=== 目录和文件检查 ===")
         for name, path in important_items:
             if path:
-                print(f"\n{name}: {path}")
-                print(f"存在: {os.path.exists(path)}")
+                logger.info(f"\n{name}: {path}")
+                logger.info(f"存在: {os.path.exists(path)}")
                 if os.path.exists(path):
                     if os.path.isdir(path):
-                        print(f"目录内容: {os.listdir(path)}")
+                        logger.info(f"目录内容: {os.listdir(path)}")
                     else:
-                        print("这是一个文件")
-        print("===============\n")
+                        logger.info("这是一个文件")
+        logger.info("===============\n")
         
         # 启用多进程支持
         freeze_support()
         
-        print("正在启动服务器...")
-        print("API文档:http://0.0.0.0:8899/docs")
+        logger.info("正在启动服务器...")
+        logger.info("API文档:http://0.0.0.0:8899/docs")
         
         # 启动FastAPI应用
         uvicorn.run(
@@ -67,30 +68,30 @@ def main():
             reload=False
         )
     except Exception as e:
-        print("\n=== 发生错误 ===")
-        print(f"错误类型: {type(e).__name__}")
-        print(f"错误信息: {str(e)}")
-        print("\n完整错误信息:")
+        logger.error("\n=== 发生错误 ===")
+        logger.error(f"错误类型: {type(e).__name__}")
+        logger.error(f"错误信息: {str(e)}")
+        logger.error("\n完整错误信息:")
         import traceback
         traceback.print_exc()
-        print("\n=== 调试信息 ===")
-        print(f"当前目录内容: {os.listdir(os.getcwd())}")
+        logger.error("\n=== 调试信息 ===")
+        logger.error(f"当前目录内容: {os.listdir(os.getcwd())}")
         if getattr(sys, 'frozen', False):
             internal_path = os.path.join(os.getcwd(), '_internal')
             if os.path.exists(internal_path):
-                print(f"_internal 目录内容: {os.listdir(internal_path)}")
-        print("===============\n")
+                logger.error(f"_internal 目录内容: {os.listdir(internal_path)}")
+        logger.error("===============\n")
 
 def run():
     try:
         main()
     except KeyboardInterrupt:
-        print("\n程序被用户中断")
+        logger.info("\n程序被用户中断")
     except Exception as e:
-        print(f"\n程序异常退出: {e}")
+        logger.error(f"\n程序异常退出: {e}")
     finally:
-        print("\n=== 程序已停止运行 ===")
-        print("按任意键退出...")
+        logger.info("\n=== 程序已停止运行 ===")
+        logger.info("按任意键退出...")
         # 等待任意键输入
         if os.name == 'nt':  # Windows
             os.system('pause >nul')
