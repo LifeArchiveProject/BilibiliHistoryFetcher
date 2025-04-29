@@ -3,8 +3,6 @@ name: 多平台构建
 on:
   workflow_dispatch:  # 允许手动触发
   push:
-    branches:
-      - 'master'  # 在主分支上推送时触发
     tags:
       - 'v*'  # 在推送标签时触发，标签格式如 v1.0.0
 
