@@ -3,9 +3,22 @@ import re
 import shutil
 import subprocess
 import sys
+import io
+import codecs
 
 import yaml
 
+# 设置输出编码为UTF-8，解决Windows命令行中文显示问题
+if sys.platform.startswith('win'):
+    # 尝试启用控制台的UTF-8模式
+    try:
+        subprocess.run(["chcp", "65001"], shell=True, check=False)
+    except:
+        pass
+    
+    # 重定向stdout和stderr为UTF-8编码
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='backslashreplace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='backslashreplace')
 
 def build(build_type):
     """执行打包过程
@@ -60,11 +73,16 @@ def build(build_type):
                 print(f"{file}: {'存在' if exists else '不存在'}")
         
         # 确保 yutto.exe 存在
-        yutto_exe = os.path.join('.venv', 'Scripts', 'yutto.exe')
-        if not os.path.exists(yutto_exe):
-            raise FileNotFoundError(f"找不到 yutto.exe: {yutto_exe}")
-
-        print(f"\n找到 yutto.exe: {yutto_exe}")
+        if os.name == 'nt':  # Windows
+            yutto_exe = os.path.join('.venv', 'Scripts', 'yutto.exe')
+            if not os.path.exists(yutto_exe):
+                raise FileNotFoundError(f"找不到 yutto.exe: {yutto_exe}")
+            print(f"\n找到 yutto.exe: {yutto_exe}")
+        else:  # Linux/macOS
+            yutto_exe = os.path.join('.venv', 'bin', 'yutto')
+            if not os.path.exists(yutto_exe):
+                raise FileNotFoundError(f"找不到 yutto: {yutto_exe}")
+            print(f"\n找到 yutto: {yutto_exe}")
         
         # 确定包管理工具 (uv或pip)
         use_uv = False
@@ -127,14 +145,17 @@ def build(build_type):
             print("\n未找到app.spec文件，正在创建...")
             
             try:
+                # 根据平台确定路径分隔符
+                path_sep = ';' if os.name == 'nt' else ':'
+                
                 makespec_cmd = [
                     python_exe, '-m', 'PyInstaller',
                     '--name=BilibiliHistoryAnalyzer',
-                    '--add-binary', f"{yutto_exe};.",
-                    '--add-data', "config/*;config", 
-                    '--add-data', "scripts;scripts",
-                    '--add-data', "routers;routers",
-                    '--add-data', "main.py;.",
+                    '--add-binary', f"{yutto_exe}{path_sep}.",
+                    '--add-data', f"config/*{path_sep}config", 
+                    '--add-data', f"scripts{path_sep}scripts",
+                    '--add-data', f"routers{path_sep}routers",
+                    '--add-data', f"main.py{path_sep}.",
                     '--paths', venv_site_packages,
                     'app_launcher.py'
                 ]
@@ -266,6 +287,31 @@ def create_spec(source_spec, target_spec, venv_site_packages=None):
         with open(source_spec, 'r', encoding='utf-8') as f:
             content = f.read()
         
+        # 处理不同平台的路径分隔符问题
+        if os.name != 'nt':  # 非Windows平台
+            # 将Windows路径分隔符(;)替换为Unix路径分隔符(:)
+            content = content.replace('config/*;config', 'config/*:config')
+            content = content.replace('scripts;scripts', 'scripts:scripts')
+            content = content.replace('routers;routers', 'routers:routers')
+            content = content.replace('main.py;.', 'main.py:.')
+            
+            # 处理yutto.exe的路径
+            content = content.replace('yutto.exe;.', 'yutto:.')
+            
+            # 特别针对yutto_exe路径进行处理，确保在非Windows平台上正确
+            if sys.platform.startswith('darwin'): # macOS
+                yutto_dir = os.path.join(os.getcwd(), '.venv', 'bin')
+                content = content.replace(
+                    "yutto_exe = os.path.join(os.getcwd(), '.venv', 'Scripts', 'yutto.exe')",
+                    f"yutto_exe = os.path.join(os.getcwd(), '.venv', 'bin', 'yutto')"
+                )
+            elif sys.platform.startswith('linux'):
+                yutto_dir = os.path.join(os.getcwd(), '.venv', 'bin')
+                content = content.replace(
+                    "yutto_exe = os.path.join(os.getcwd(), '.venv', 'Scripts', 'yutto.exe')",
+                    f"yutto_exe = os.path.join(os.getcwd(), '.venv', 'bin', 'yutto')"
+                )
+        
         # 添加虚拟环境路径到pathex
         if venv_site_packages and os.path.exists(venv_site_packages):
             if "pathex=" in content:
@@ -313,12 +359,37 @@ def run_pyinstaller(spec_file, python_exe=None):
         if not python_exe:
             python_exe = sys.executable
             
+        # 打印平台信息
+        print(f"\n=== 平台信息 ===")
+        print(f"操作系统: {sys.platform}")
+        print(f"Python版本: {sys.version}")
+        print(f"当前目录: {os.getcwd()}")
+        print(f"Python解释器: {python_exe}")
+        
+        # 验证spec文件
+        if not os.path.exists(spec_file):
+            print(f"\n错误: spec文件不存在: {spec_file}")
+            return False
+        
+        # 打印spec文件的前10行用于调试
+        print(f"\nspec文件前10行内容:")
+        with open(spec_file, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f.readlines()[:10]):
+                print(f"{i+1}: {line.strip()}")
+            
         print(f"\n运行命令: {python_exe} -m PyInstaller --clean --noconfirm {spec_file}\n")
         print("正在执行PyInstaller打包过程...这可能需要一些时间...")
         
+        # 确保PyInstaller命令适合当前平台
+        pyinstaller_cmd = [python_exe, '-m', 'PyInstaller', '--clean', '--noconfirm', spec_file]
+        
+        # 如果是macOS或Linux，添加--log-level=DEBUG以获取更多输出
+        if sys.platform != 'win32':
+            pyinstaller_cmd.insert(3, '--log-level=DEBUG')
+        
         # 使用subprocess.Popen实现实时输出
         process = subprocess.Popen(
-            [python_exe, '-m', 'PyInstaller', '--clean', '--noconfirm', spec_file],
+            pyinstaller_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True,

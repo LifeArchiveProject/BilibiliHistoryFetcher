@@ -1,0 +1,262 @@
+name: 多平台构建
+
+on:
+  workflow_dispatch:  # 允许手动触发
+  push:
+    branches:
+      - 'master'  # 在主分支上推送时触发
+    tags:
+      - 'v*'  # 在推送标签时触发，标签格式如 v1.0.0
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        python-version: ['3.10']
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 设置Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        pip install yutto
+
+    - name: 创建logo文件
+      run: |
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          cp logo.png logo.ico || true
+        elif [ "${{ matrix.os }}" == "macos-latest" ]; then
+          cp logo.png logo.icns || true
+        fi
+      shell: bash
+
+    - name: 创建虚拟环境 (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        python -m venv .venv
+        .\.venv\Scripts\pip install -r requirements.txt
+        .\.venv\Scripts\pip install pyinstaller
+        .\.venv\Scripts\pip install yutto
+      shell: cmd
+
+    - name: 创建虚拟环境 (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install -r requirements.txt
+        pip install pyinstaller
+        pip install yutto
+      shell: bash
+
+    - name: 使用build.py构建应用 (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        .\.venv\Scripts\python build.py
+      shell: cmd
+
+    - name: 使用build.py构建应用 (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        .venv/bin/python build.py
+      shell: bash
+
+    - name: 检查构建结果 (调试)
+      run: |
+        echo "当前目录内容："
+        ls -la
+        
+        echo "检查dist目录是否存在..."
+        if [ ! -d "./dist" ]; then
+          echo "警告: dist目录不存在，创建空目录"
+          mkdir -p ./dist
+        fi
+        
+        echo "dist目录内容："
+        ls -la ./dist/
+        
+        echo "检查可能的构建产物目录:"
+        find . -type d -name "*BilibiliHistory*" -o -name "*bili*" | grep -v "__pycache__"
+      shell: bash
+      
+    - name: 创建构建验证报告
+      run: |
+        # 创建简单版构建报告，确保在任何平台都能运行
+        echo "# 构建验证报告 (${{ matrix.os }})" > build_report.md
+        echo "构建时间: $(date)" >> build_report.md
+        echo "" >> build_report.md
+        echo "## 系统信息" >> build_report.md
+        echo "- 操作系统: ${{ matrix.os }}" >> build_report.md
+        echo "- Python版本: ${{ matrix.python-version }}" >> build_report.md
+        echo "" >> build_report.md
+        
+        echo "## 构建产物" >> build_report.md
+        if [ -d "./dist" ]; then
+          echo "### dist目录内容:" >> build_report.md
+          echo '```' >> build_report.md
+          ls -la ./dist/ >> build_report.md
+          echo '```' >> build_report.md
+          
+          # 简单检查，使用ls和通配符列出可能的构建产物
+          echo "### 可能的产物文件:" >> build_report.md
+          echo '```' >> build_report.md
+          # 使用简单的ls列出文件
+          find ./dist -type d | sort >> build_report.md
+          echo "" >> build_report.md
+          
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            # Windows特定文件
+            ls -la ./dist/*.exe 2>/dev/null >> build_report.md || echo "未找到.exe文件" >> build_report.md
+          else
+            # 非Windows平台
+            ls -la ./dist/**/BilibiliHistoryAnalyzer* 2>/dev/null >> build_report.md || echo "未找到主程序文件" >> build_report.md
+          fi
+          echo '```' >> build_report.md
+          
+          # 添加目录树信息
+          echo "### 目录结构:" >> build_report.md
+          echo '```' >> build_report.md
+          if [ "${{ matrix.os }}" == "macos-latest" ] || [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
+            # macOS和Linux有ls -R命令
+            ls -R ./dist/ 2>/dev/null >> build_report.md || find ./dist -type f | sort >> build_report.md
+          else
+            # Windows可能没有ls -R
+            find ./dist -type f | sort >> build_report.md
+          fi
+          echo '```' >> build_report.md
+        else
+          echo "❌ 未找到dist目录" >> build_report.md
+        fi
+        
+        echo "" >> build_report.md
+        echo "## 构建状态" >> build_report.md
+        if [ -d "./dist" ] && [ "$(ls -la ./dist/ | wc -l)" -gt 3 ]; then
+          if [ -d "./dist/empty" ]; then
+            echo "❌ 构建失败 (发现empty目录)" >> build_report.md
+          else
+            echo "✅ 构建可能成功" >> build_report.md
+          fi
+        else
+          echo "❌ 构建失败 (dist目录为空或不存在)" >> build_report.md
+        fi
+        
+        cat build_report.md
+      shell: bash
+      
+    - name: 上传构建报告
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-report-${{ matrix.os }}
+        path: build_report.md
+        
+    - name: 打包构建结果
+      run: |
+        echo "当前平台: ${{ matrix.os }}"
+        
+        # 确保dist目录存在
+        mkdir -p ./dist
+        
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          # Windows平台特殊处理
+          if [ -d "./dist/BilibiliHistoryAnalyzer" ]; then
+            echo "使用BilibiliHistoryAnalyzer目录"
+            7z a -tzip BilibiliHistoryFetcher-windows.zip ./dist/BilibiliHistoryAnalyzer
+          else
+            echo "查找可能的输出目录..."
+            find ./dist -type d -maxdepth 1 -print
+            FIRST_DIR=$(find ./dist -type d -maxdepth 1 | grep -v "^./dist$" | head -1)
+            if [ ! -z "$FIRST_DIR" ]; then
+              echo "使用目录: $FIRST_DIR"
+              7z a -tzip BilibiliHistoryFetcher-windows.zip "$FIRST_DIR"
+            else
+              echo "未找到构建目录，创建空包"
+              mkdir -p ./dist/empty
+              echo "构建失败，此为空包。请检查构建日志。" > ./dist/empty/README.txt
+              7z a -tzip BilibiliHistoryFetcher-windows.zip ./dist/empty
+            fi
+          fi
+        elif [ "${{ matrix.os }}" == "macos-latest" ]; then
+          # macOS平台
+          echo "dist目录内容:"
+          ls -la ./dist/
+          
+          # 查找dist目录下的子目录
+          DIST_DIR=$(find ./dist -type d -mindepth 1 -maxdepth 1 | head -1)
+          if [ ! -z "$DIST_DIR" ]; then
+            echo "找到输出目录: $DIST_DIR"
+            cd dist && zip -r ../BilibiliHistoryFetcher-macos.zip $(basename "$DIST_DIR")
+          else
+            echo "未找到构建目录，创建空包"
+            mkdir -p ./dist/empty
+            echo "构建失败，此为空包。请检查构建日志。" > ./dist/empty/README.txt
+            cd dist && zip -r ../BilibiliHistoryFetcher-macos.zip empty
+          fi
+        else
+          # Linux平台
+          echo "dist目录内容:"
+          ls -la ./dist/
+          
+          # 查找dist目录下的子目录
+          DIST_DIR=$(find ./dist -type d -mindepth 1 -maxdepth 1 | head -1)
+          if [ ! -z "$DIST_DIR" ]; then
+            echo "找到输出目录: $DIST_DIR"
+            cd dist && zip -r ../BilibiliHistoryFetcher-linux.zip $(basename "$DIST_DIR")
+          else
+            echo "未找到构建目录，创建空包"
+            mkdir -p ./dist/empty
+            echo "构建失败，此为空包。请检查构建日志。" > ./dist/empty/README.txt
+            cd dist && zip -r ../BilibiliHistoryFetcher-linux.zip empty
+          fi
+        fi
+      shell: bash
+
+    - name: 上传构建产物
+      uses: actions/upload-artifact@v4
+      with:
+        name: BilibiliHistoryFetcher-${{ matrix.os }}
+        path: BilibiliHistoryFetcher-*.zip
+
+  release:
+    name: 创建发布
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: 下载所有构建产物
+      uses: actions/download-artifact@v4
+
+    - name: 列出下载的文件
+      run: find . -type f -name "*.zip"
+      shell: bash
+
+    - name: 创建GitHub发布
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          ./BilibiliHistoryFetcher-windows-latest/BilibiliHistoryFetcher-windows.zip
+          ./BilibiliHistoryFetcher-macos-latest/BilibiliHistoryFetcher-macos.zip
+          ./BilibiliHistoryFetcher-ubuntu-latest/BilibiliHistoryFetcher-linux.zip
+        name: Release ${{ github.ref_name }}
+        body: |
+          BilibiliHistoryFetcher ${{ github.ref_name }} 发布
+
+          ## 下载
+          - [Windows版](./BilibiliHistoryFetcher-windows.zip)
+          - [macOS版](./BilibiliHistoryFetcher-macos.zip)
+          - [Linux版](./BilibiliHistoryFetcher-linux.zip)
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

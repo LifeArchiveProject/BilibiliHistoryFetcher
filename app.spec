@@ -3,13 +3,37 @@
 block_cipher = None
 
 import os
+import sys
 
 # 获取虚拟环境的site-packages路径
-venv_site_packages = '.venv/Lib/site-packages'
+if sys.platform.startswith('win'):
+    venv_site_packages = '.venv/Lib/site-packages'
+    yutto_exe = os.path.join(os.getcwd(), '.venv', 'Scripts', 'yutto.exe')
+else:  # Linux/macOS
+    python_version = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    venv_site_packages = f'.venv/lib/{python_version}/site-packages'
+    yutto_exe = os.path.join(os.getcwd(), '.venv', 'bin', 'yutto')
 
-yutto_exe = os.path.join(os.getcwd(), '.venv', 'Scripts', 'yutto.exe')
+# 检查yutto可执行文件
 if not os.path.exists(yutto_exe):
-    raise FileNotFoundError(f"找不到 yutto.exe: {yutto_exe}")
+    print(f"警告: 找不到 yutto: {yutto_exe}")
+    if os.name == 'nt':  # Windows
+        # 尝试查找yutto.exe
+        import glob
+        yutto_candidates = glob.glob(os.path.join('.venv', '**', 'yutto.exe'), recursive=True)
+        if yutto_candidates:
+            yutto_exe = yutto_candidates[0]
+            print(f"找到替代的yutto.exe: {yutto_exe}")
+    else:  # Linux/macOS
+        # 尝试查找yutto
+        import glob
+        yutto_candidates = glob.glob(os.path.join('.venv', '**', 'yutto'), recursive=True)
+        if yutto_candidates:
+            yutto_exe = yutto_candidates[0]
+            print(f"找到替代的yutto: {yutto_exe}")
+
+# 设置平台相关的路径分隔符
+path_sep = ';' if sys.platform.startswith('win') else ':'
 
 a = Analysis(
     ['app_launcher.py'],
@@ -52,6 +76,7 @@ a = Analysis(
         (os.path.join(venv_site_packages, 'psutil'), 'psutil'),
         (os.path.join(venv_site_packages, 'tqdm'), 'tqdm'),
         (os.path.join(venv_site_packages, 'email_validator'), 'email_validator'),
+        (os.path.join(venv_site_packages, 'loguru'), 'loguru'),
     ],
     hiddenimports=[
         'fastapi',
@@ -133,6 +158,7 @@ a = Analysis(
         'psutil',
         'tqdm',
         'email_validator',
+        'loguru',
         # 以下是fastapi和其他库的子模块
         'fastapi.applications',
         'fastapi.routing',
