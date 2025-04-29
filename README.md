@@ -123,7 +123,7 @@
    # 运行程序
    uv run main.py
    ```
-   
+
    **Linux/macOS系统:**
    ```bash
    # 安装 PyTorch（使用 NVIDIA 显卡）
@@ -133,7 +133,7 @@
    # 安装 PyTorch（使用 CPU）
    UV_TORCH_BACKEND=cpu uv pip install torch torchaudio torchvision
    ```
-   
+
    **Windows系统:**
    ```powershell
    # PowerShell中安装 PyTorch（使用 NVIDIA 显卡）
@@ -153,7 +153,7 @@
    set UV_TORCH_BACKEND=cpu
    uv pip install torch torchaudio torchvision
    ```
-   
+
    ```bash
    # 运行程序
    uv run main.py
@@ -245,6 +245,14 @@ BilibiliHistoryAnalyzer.exe
 ## 后续开发计划
 
 项目正在积极开发中，您可以在我们的 [GitHub 项目计划页面](https://github.com/users/2977094657/projects/2) 查看最新的开发路线图和即将实现的功能。
+
+## 交流群
+
+如果您在使用过程中有任何问题或想与其他用户交流使用心得，欢迎加入我们的QQ交流群[1030089634](https://qm.qq.com/q/k6MZXcofLy)：
+
+<p align="center">
+    <img src="./Qun.png" width="300" />
+</p>
 
 ## 致谢
 
