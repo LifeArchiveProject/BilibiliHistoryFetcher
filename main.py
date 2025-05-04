@@ -3,8 +3,12 @@ import os
 import platform
 import sys
 import traceback
+import warnings
 from contextlib import asynccontextmanager
 from datetime import datetime
+
+# 忽略jieba库中的无效转义序列警告
+warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,7 +42,6 @@ from routers import (
     favorite,
     popular_videos
 )
-from scripts.popular_videos import schedule_daily_cleanup
 from scripts.scheduler_db_enhanced import EnhancedSchedulerDB
 from scripts.scheduler_manager import SchedulerManager
 from scripts.utils import load_config
@@ -51,36 +54,36 @@ def setup_logging():
     current_date = datetime.now().strftime("%Y/%m/%d")
     year_month = current_date.rsplit("/", 1)[0]  # 年/月 部分
     day_only = current_date.split('/')[-1]  # 只取日期中的"日"部分
-    
+
     # 日志文件夹路径(年/月/日)
     log_dir = f'output/logs/{year_month}/{day_only}'
     os.makedirs(log_dir, exist_ok=True)
-    
+
     # 日志文件路径
     main_log_file = f'{log_dir}/{day_only}.log'
     error_log_file = f'{log_dir}/error_{day_only}.log'
-    
+
     # 移除默认处理器
     logger.remove()
-    
+
     # 配置全局上下文信息
     logger.configure(extra={"app_name": "BilibiliHistoryFetcher", "version": "1.0.0"})
-    
+
     # 添加控制台处理器（仅INFO级别以上，只显示消息，无时间戳等）
     logger.add(
-        sys.stdout, 
-        level="INFO", 
+        sys.stdout,
+        level="INFO",
         format="<green>{message}</green>",
         filter=lambda record: (
             # 只有以特定字符开头的信息才输出到控制台
-            isinstance(record["message"], str) and 
+            isinstance(record["message"], str) and
             record["message"].startswith(("===", "正在", "已", "成功", "错误:", "警告:"))
         )
     )
-    
+
     # 添加文件处理器（完整日志信息）
     file_handler_id = logger.add(
-        main_log_file,  
+        main_log_file,
         level="INFO",
         format="[{time:YYYY-MM-DD HH:mm:ss}] [{level}] [{extra[app_name]}] [v{extra[version]}] [进程:{process}] [线程:{thread}] [{name}] [{file.name}:{line}] [{function}] {message}\n{exception}",
         encoding="utf-8",
@@ -91,7 +94,7 @@ def setup_logging():
         backtrace=True,  # 启用异常回溯
         diagnose=True    # 启用诊断信息
     )
-    
+
     # 专门用于记录错误级别日志的处理器
     error_handler_id = logger.add(
         error_log_file,
@@ -105,43 +108,43 @@ def setup_logging():
         backtrace=True,
         diagnose=True
     )
-    
+
     # 重定向系统异常到日志
     logger.add(
         lambda msg: sys.__stderr__.write(f"{msg}\n"),
-        level="ERROR", 
+        level="ERROR",
         format="<red>系统错误: {message}</red>",
-        backtrace=True, 
+        backtrace=True,
         diagnose=True
     )
-    
+
     # 重定向 print 输出到日志
     class PrintToLogger:
         def __init__(self, stdout):
             self.stdout = stdout
             self._line_buffer = []
             self._is_shutting_down = False  # 标记系统是否正在关闭
-            
+
         def write(self, buf):
             # 如果系统正在关闭，直接写入原始stdout而不经过logger
             if self._is_shutting_down:
                 self.stdout.write(buf)
                 return
-                
+
             # 跳过uvicorn日志
             if any(skip in buf for skip in [
-                'INFO:', 'ERROR:', 'WARNING:', '[32m', '[0m', 
+                'INFO:', 'ERROR:', 'WARNING:', '[32m', '[0m',
                 'Application', 'Started', 'Waiting', 'HTTP',
                 'uvicorn', 'DEBUG'
             ]):
                 # 只写入到控制台
                 self.stdout.write(buf)
                 return
-                
+
             # 检测是否是关闭信息
             if "应用关闭" in buf or "Shutting down" in buf:
                 self._is_shutting_down = True
-                
+
             # 收集完整的行
             for c in buf:
                 if c == '\n':
@@ -160,7 +163,7 @@ def setup_logging():
                     self._line_buffer = []
                 else:
                     self._line_buffer.append(c)
-        
+
         def flush(self):
             if self._line_buffer:
                 line = ''.join(self._line_buffer).rstrip()
@@ -174,21 +177,21 @@ def setup_logging():
                         self.stdout.write(f"{line}\n")
                 self._line_buffer = []
             self.stdout.flush()
-        
+
         def isatty(self):
             return self.stdout.isatty()
-        
+
         def fileno(self):
             return self.stdout.fileno()
-        
+
         # 在应用关闭阶段调用，标记关闭状态
         def mark_shutdown(self):
             self._is_shutting_down = True
-    
+
     # 保存原始的stdout并重定向
     original_stdout = sys.stdout
     sys.stdout = PrintToLogger(original_stdout)
-    
+
     # 配置uvicorn日志与loguru集成
     # 拦截标准库logging
     import logging
@@ -199,21 +202,21 @@ def setup_logging():
                 level = logger.level(record.levelname).name
             except ValueError:
                 level = record.levelno
-                
+
             # 获取调用者的文件名和行号
             frame, depth = sys._getframe(6), 6
             while frame and frame.f_code.co_filename == logging.__file__:
                 frame = frame.f_back
                 depth += 1
-            
+
             # 记录到日志文件，但不输出到控制台
             logger.opt(depth=depth, exception=record.exc_info).log(
                 level, record.getMessage()
             )
-    
+
     # 替换所有标准库的日志处理器
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-    
+
     # 返回当前日志文件夹路径和文件信息
     return {
         "log_dir": log_dir,
@@ -247,43 +250,43 @@ scheduler_manager = None
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     global scheduler_manager
-    
+
     logger.info("正在启动应用...")
-    
+
     try:
         # 初始化增强版数据库
         EnhancedSchedulerDB.get_instance()
         logger.info("已初始化增强版调度器数据库")
-        
+
         # 初始化调度器
         scheduler_manager = SchedulerManager.get_instance(app)
-        
+
         # 显示调度器配置
         logger.info(f"调度器配置:")
         logger.info(f"  基础URL: {scheduler_manager.base_url}")
         logger.info(f"  (从 config/config.yaml 的 server 配置生成)")
-        
+
         # 检查基础URL是否包含协议前缀
         if not scheduler_manager.base_url.startswith(('http://', 'https://')):
             logger.warning(f"  警告: 基础URL不包含协议前缀，这可能导致任务执行错误")
             logger.warning(f"  建议: 检查服务器配置确保正确构建URL")
-        
+
         # 创建异步任务运行调度器
         scheduler_task = asyncio.create_task(scheduler_manager.run_scheduler())
 
         logger.success("=== 应用启动完成 ===")
         logger.info(f"启动时间: {datetime.now().isoformat()}")
-        
+
         yield
-        
+
         # 关闭时
         logger.info("\n=== 应用关闭阶段 ===")
         logger.info(f"开始时间: {datetime.now().isoformat()}")
-        
+
         # 标记stdout重定向器为关闭状态，防止重入
         if hasattr(sys.stdout, 'mark_shutdown'):
             sys.stdout.mark_shutdown()
-        
+
         if scheduler_manager:
             logger.info("正在停止调度器...")
             scheduler_manager.stop_scheduler()
@@ -294,21 +297,21 @@ async def lifespan(app: FastAPI):
                 await scheduler_task
             except asyncio.CancelledError:
                 logger.info("调度器任务已取消")
-        
+
         # 恢复原始的 stdout
         if hasattr(sys.stdout, 'stdout'):
             logger.info("正在恢复标准输出...")
             sys.stdout = sys.stdout.stdout
-            
+
         logger.success("=== 应用关闭完成 ===")
         logger.info(f"结束时间: {datetime.now().isoformat()}")
-        
+
         # 清理日志处理器，防止关闭时的死锁
         # 注意：必须在所有日志记录之后调用
         logger_handlers = logger._core.handlers.copy()  # 复制处理器列表
         for handler_id in logger_handlers:
             logger.remove(handler_id)
-            
+
     except Exception as e:
         logger.error(f"\n=== 应用生命周期出错 ===")
         logger.error(f"错误信息: {str(e)}")
@@ -377,10 +380,10 @@ if __name__ == "__main__":
     import uvicorn
     import atexit
     import signal
-    
+
     # 配置日志系统
     log_info = setup_logging()
-    
+
     # 信号处理函数
     def signal_handler(sig, frame):
         print(f"\n接收到信号 {sig}，正在优雅关闭...")
@@ -388,11 +391,11 @@ if __name__ == "__main__":
         if hasattr(sys.stdout, 'mark_shutdown'):
             sys.stdout.mark_shutdown()
         sys.exit(0)
-    
+
     # 注册信号处理函数
     signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
     signal.signal(signal.SIGTERM, signal_handler)  # 终止信号
-    
+
     # 注册退出时清理函数
     @atexit.register
     def cleanup_at_exit():
@@ -409,16 +412,16 @@ if __name__ == "__main__":
             except:
                 pass
         print("日志系统已关闭")
-    
+
     # 加载配置
     config = load_config()
     server_config = config.get('server', {})
-    
+
     # 检查是否启用SSL
     ssl_enabled = server_config.get('ssl_enabled', False)
     ssl_certfile = server_config.get('ssl_certfile', None)
     ssl_keyfile = server_config.get('ssl_keyfile', None)
-    
+
     # 使用SSL证书启动应用（如果启用）
     if ssl_enabled and ssl_certfile and ssl_keyfile:
         logger.info(f"使用HTTPS启动服务，端口: {server_config.get('port', 8899)}")
@@ -429,15 +432,15 @@ if __name__ == "__main__":
             if not os.path.exists(ssl_certfile):
                 logger.error(f"错误: SSL证书文件不存在: {ssl_certfile}")
                 sys.exit(1)
-            
+
             if not os.path.exists(ssl_keyfile):
                 logger.error(f"错误: SSL密钥文件不存在: {ssl_keyfile}")
                 sys.exit(1)
-            
+
             # 检查文件权限
             logger.info(f"证书文件权限: {oct(os.stat(ssl_certfile).st_mode)[-3:]}")
             logger.info(f"密钥文件权限: {oct(os.stat(ssl_keyfile).st_mode)[-3:]}")
-            
+
             uvicorn.run(
                 "main:app",
                 host=server_config.get('host', "127.0.0.1"),
