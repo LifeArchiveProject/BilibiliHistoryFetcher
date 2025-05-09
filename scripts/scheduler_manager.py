@@ -938,11 +938,50 @@ class SchedulerManager:
             params = task.get('params', {})
             timeout = task.get('timeout', 300)
             
+            # 强制将所有调度任务设置为内部API调用类型
+            task['task_type'] = 'internal_api'
+            
+            # 从配置中获取API密钥
+            try:
+                config = load_config()
+                api_security = config.get('server', {}).get('api_security', {})
+                api_enabled = api_security.get('enabled', False)
+                api_key = api_security.get('api_key', '')
+                
+                logger.info(f"API安全状态: enabled={api_enabled}, API密钥长度: {len(api_key) if api_key else 0}")
+                print(f"API安全状态: enabled={api_enabled}, API密钥长度: {len(api_key) if api_key else 0}")
+                
+                # 检查任务类型是否是内部API调用
+                task_type = task.get('task_type', '')
+                logger.info(f"任务 {task_id} 类型: {task_type}")
+                print(f"任务 {task_id} 类型: {task_type}")
+                
+                if task_type == 'internal_api':
+                    # 内部API调用不需要验证API密钥
+                    logger.info(f"任务 {task_id} 是内部API调用，跳过API密钥验证")
+                    print(f"任务 {task_id} 是内部API调用，跳过API密钥验证")
+                    headers = {'X-Internal-Call': 'true'}
+                elif api_security.get('enabled', False):
+                    # 普通任务，添加API密钥
+                    api_key = api_security.get('api_key', '')
+                    headers = {'X-API-Key': api_key}
+                    logger.info(f"任务 {task_id} 已添加API密钥到请求头，密钥长度: {len(api_key)}")
+                    print(f"任务 {task_id} 已添加API密钥到请求头，密钥长度: {len(api_key)}")
+                else:
+                    # API安全验证未启用
+                    headers = {}
+                    logger.info(f"API安全验证未启用，不添加API密钥")
+                    print(f"API安全验证未启用，不添加API密钥")
+            except Exception as e:
+                logger.error(f"获取API密钥失败: {str(e)}")
+                print(f"获取API密钥失败: {str(e)}")
+                headers = {}
+            
             async with httpx.AsyncClient(timeout=timeout) as client:
                 if method == 'GET':
-                    response = await client.get(url, params=params)
+                    response = await client.get(url, params=params, headers=headers)
                 else:
-                    response = await client.post(url, json=params)
+                    response = await client.post(url, json=params, headers=headers)
                     
                 end_time = datetime.now()
                 end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')

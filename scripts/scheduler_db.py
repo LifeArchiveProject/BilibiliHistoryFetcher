@@ -157,12 +157,21 @@ class SchedulerDB:
             task_status = self.get_task_status(task_id)
             cursor = self.conn.cursor()
             
+            # 检查task_status表是否有last_modified列
+            cursor.execute("PRAGMA table_info(task_status)")
+            columns = cursor.fetchall()
+            has_last_modified = any(col[1] == 'last_modified' for col in columns)
+            
             if task_status:
                 # 任务存在，更新
                 fields = []
                 values = []
                 
                 for key, value in data.items():
+                    # 确保列存在于表中
+                    if key == 'last_modified' and not has_last_modified:
+                        continue
+                        
                     fields.append(f"{key} = ?")
                     
                     # 处理特殊字段
@@ -171,9 +180,10 @@ class SchedulerDB:
                     else:
                         values.append(value)
                 
-                # 添加最后修改时间
-                fields.append("last_modified = ?")
-                values.append(datetime.now().isoformat())
+                # 如果表中有last_modified列，才添加最后修改时间
+                if has_last_modified:
+                    fields.append("last_modified = ?")
+                    values.append(datetime.now().isoformat())
                 
                 # 添加任务ID
                 values.append(task_id)
@@ -190,6 +200,10 @@ class SchedulerDB:
                 values = [task_id]
                 
                 for key, value in data.items():
+                    # 确保列存在于表中
+                    if key == 'last_modified' and not has_last_modified:
+                        continue
+                        
                     fields.append(key)
                     placeholders.append('?')
                     
@@ -199,10 +213,11 @@ class SchedulerDB:
                     else:
                         values.append(value)
                 
-                # 添加最后修改时间
-                fields.append("last_modified")
-                placeholders.append("?")
-                values.append(datetime.now().isoformat())
+                # 如果表中有last_modified列，才添加最后修改时间
+                if has_last_modified:
+                    fields.append("last_modified")
+                    placeholders.append("?")
+                    values.append(datetime.now().isoformat())
                 
                 query = f'''
                 INSERT INTO task_status ({", ".join(fields)})

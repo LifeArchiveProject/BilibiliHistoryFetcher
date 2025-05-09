@@ -76,6 +76,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # 检查是否是内部调用
+        is_internal_call = request.headers.get('X-Internal-Call') == 'true'
+        if is_internal_call:
+            logger.info(f"检测到内部调用请求，路径: {path}")
+            return await call_next(request)
+
         # 从请求头中获取API密钥
         request_api_key = request.headers.get('X-API-Key')
 
