@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 import requests
 from fastapi import APIRouter, HTTPException, Query
@@ -2311,4 +2311,107 @@ async def get_user_videos(
             status="error",
             message=f"获取用户投稿视频列表时出错：{str(e)}",
             data={"error_trace": error_trace}
+        )
+
+# 合集视频信息响应模型
+class SeasonVideoInfo(BaseModel):
+    title: str
+    cover: str
+    duration: int
+    vv: int
+    vt: int
+    bvid: str
+    aid: int
+    cid: int
+
+class SeasonInfoResponse(BaseModel):
+    status: str
+    message: str
+    season_id: Optional[int] = None
+    season_title: Optional[str] = None
+    season_cover: Optional[str] = None
+    videos: Optional[List[SeasonVideoInfo]] = None
+
+@router.get("/video_season_info", summary="获取视频观看时长信息")
+async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
+    """
+    获取视频观看时长信息
+    
+    检查视频是否为合集中的视频，并返回合集信息及其中所有视频的详细信息
+    
+    Args:
+        bvid: 视频bvid
+        sessdata: B站会话ID，用于获取需要登录才能访问的视频
+    """
+    try:
+        # 首先调用现有的获取视频详情接口
+        video_detail = await get_video_info(bvid=bvid, sessdata=sessdata)
+        
+        # 如果获取视频详情失败，直接返回错误
+        if video_detail.status != "success":
+            return SeasonInfoResponse(
+                status="error",
+                message=f"获取视频信息失败: {video_detail.message}"
+            )
+        
+        # 检查视频是否属于某个合集
+        video_data = video_detail.data
+        if not video_data.get("season_id"):
+            return SeasonInfoResponse(
+                status="info",
+                message="该视频不属于任何合集"
+            )
+        
+        # 视频属于合集，获取合集信息
+        season_id = video_data.get("season_id")
+        
+        # 如果有ugc_season字段，从中提取合集信息
+        season_info = video_data.get("ugc_season", {})
+        if not season_info:
+            return SeasonInfoResponse(
+                status="error",
+                message="无法获取合集信息",
+                season_id=season_id
+            )
+        
+        # 提取合集标题和封面
+        season_title = season_info.get("title", "")
+        season_cover = season_info.get("cover", "")
+        
+        # 提取合集中的所有视频信息
+        video_list = []
+        sections = season_info.get("sections", [])
+        
+        for section in sections:
+            episodes = section.get("episodes", [])
+            for episode in episodes:
+                # 提取所需的视频信息
+                arc = episode.get("arc", {})
+                page = episode.get("page", {})
+                
+                video_info = SeasonVideoInfo(
+                    title=episode.get("title", ""),
+                    cover=arc.get("pic", ""),
+                    duration=page.get("duration", 0),
+                    vv=arc.get("stat", {}).get("vv", 0),
+                    vt=arc.get("stat", {}).get("vt", 0),
+                    bvid=episode.get("bvid", ""),
+                    aid=arc.get("aid", 0),
+                    cid=page.get("cid", 0)
+                )
+                video_list.append(video_info)
+        
+        return SeasonInfoResponse(
+            status="success",
+            message="获取合集视频信息成功",
+            season_id=season_id,
+            season_title=season_title,
+            season_cover=season_cover,
+            videos=video_list
+        )
+            
+    except Exception as e:
+        return SeasonInfoResponse(
+            status="error",
+            message=f"获取视频观看时长信息时出错：{str(e)}"
         )
