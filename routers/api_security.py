@@ -6,7 +6,7 @@ import yaml
 from fastapi import APIRouter, Header
 from pydantic import BaseModel
 
-from scripts.utils import load_config
+from scripts.utils import load_config, get_config_path
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -102,11 +102,13 @@ async def update_api_key(request: ApiKeyUpdateRequest):
         包含更新结果的响应对象
     """
     try:
-        # 配置文件路径
-        config_path = os.path.join('config', 'config.yaml')
+        # 获取配置文件路径（使用utils.py中的方法，保持路径一致性）
+        config_path = get_config_path('config.yaml')
+        logger.info(f"更新API密钥，使用配置文件路径: {config_path}")
 
         # 检查配置文件是否存在
         if not os.path.exists(config_path):
+            logger.error(f"配置文件不存在: {config_path}")
             return ApiKeyUpdateResponse(
                 success=False,
                 message="配置文件不存在"
@@ -249,11 +251,13 @@ async def verify_and_update_api_key(request: ApiKeyVerifyAndUpdateRequest):
                 message="新API密钥与当前API密钥相同，无需更新"
             )
 
-        # 配置文件路径
-        config_path = os.path.join('config', 'config.yaml')
+        # 获取配置文件路径（使用utils.py中的方法，保持路径一致性）
+        config_path = get_config_path('config.yaml')
+        logger.info(f"验证并更新API密钥，使用配置文件路径: {config_path}")
 
         # 检查配置文件是否存在
         if not os.path.exists(config_path):
+            logger.error(f"配置文件不存在: {config_path}")
             return ApiKeyUpdateResponse(
                 success=False,
                 message="配置文件不存在"

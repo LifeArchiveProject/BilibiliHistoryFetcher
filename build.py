@@ -61,7 +61,8 @@ def build(build_type):
             'requirements.txt',
             'config',
             'scripts',
-            'routers'
+            'routers',
+            'middleware'
         ]
         
         print("\n=== 关键文件检查 ===\n")
@@ -155,6 +156,7 @@ def build(build_type):
                     '--add-data', f"config/*{path_sep}config", 
                     '--add-data', f"scripts{path_sep}scripts",
                     '--add-data', f"routers{path_sep}routers",
+                    '--add-data', f"middleware{path_sep}middleware",
                     '--add-data', f"main.py{path_sep}.",
                     '--paths', venv_site_packages,
                     'app_launcher.py'
@@ -293,6 +295,7 @@ def create_spec(source_spec, target_spec, venv_site_packages=None):
             content = content.replace('config/*;config', 'config/*:config')
             content = content.replace('scripts;scripts', 'scripts:scripts')
             content = content.replace('routers;routers', 'routers:routers')
+            content = content.replace('middleware;middleware', 'middleware:middleware')
             content = content.replace('main.py;.', 'main.py:.')
             
             # 处理yutto.exe的路径
@@ -494,7 +497,7 @@ def cleanup_sensitive_config():
             "email.receiver": "example@example.com",
             "server.ssl_certfile": "path/to/cert.pem",
             "server.ssl_keyfile": "path/to/key.pem",
-            "deepseek.api_key": "你的API密钥"
+            "deepseek.api_key": "your-secret-api-key-change-this"
         }
         
         # 将一些独立的顶级字段也加入检查
@@ -615,6 +618,29 @@ def post_build_copy(dist_dir):
             f.write("- scheduler_config.yaml: 计划任务配置文件\n")
         
         print(f"已创建配置说明文件: {readme_path}")
+        
+        # 确保middleware文件夹被复制到输出目录
+        middleware_src = os.path.join(os.getcwd(), 'middleware')
+        middleware_dst = os.path.join(dist_dir, '_internal', 'middleware')
+        
+        # 如果middleware源目录存在但目标目录不存在，则复制
+        if os.path.exists(middleware_src) and not os.path.exists(middleware_dst):
+            try:
+                import shutil
+                # 创建middleware目标目录
+                os.makedirs(middleware_dst, exist_ok=True)
+                # 复制所有middleware文件
+                for item in os.listdir(middleware_src):
+                    src_item = os.path.join(middleware_src, item)
+                    dst_item = os.path.join(middleware_dst, item)
+                    if os.path.isfile(src_item):
+                        shutil.copy2(src_item, dst_item)
+                    elif os.path.isdir(src_item):
+                        shutil.copytree(src_item, dst_item)
+                print(f"\n已手动复制middleware文件夹到: {middleware_dst}")
+            except Exception as e:
+                print(f"\n复制middleware文件夹时出错: {e}")
+        
         return True
     except Exception as e:
         print(f"\n构建后处理时出错: {e}")
