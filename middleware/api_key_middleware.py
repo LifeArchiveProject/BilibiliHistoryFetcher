@@ -81,6 +81,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if is_internal_call:
             logger.info(f"检测到内部调用请求，路径: {path}")
             return await call_next(request)
+            
+        # 检查请求的Accept头是否包含text/event-stream（SSE请求）
+        accept_header = request.headers.get('Accept', '')
+        if 'text/event-stream' in accept_header:
+            logger.info(f"检测到SSE请求，自动放行，路径: {path}")
+            return await call_next(request)
 
         # 从请求头中获取API密钥
         request_api_key = request.headers.get('X-API-Key')
