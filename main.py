@@ -13,7 +13,6 @@ warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escap
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
-from middleware.api_key_middleware import APIKeyMiddleware
 
 from routers import (
     analysis,
@@ -42,8 +41,7 @@ from routers import (
     data_sync,
     favorite,
     popular_videos,
-    bilibili_history_delete,
-    api_security
+    bilibili_history_delete
 )
 from scripts.scheduler_db_enhanced import EnhancedSchedulerDB
 from scripts.scheduler_manager import SchedulerManager
@@ -232,14 +230,14 @@ def setup_logging():
         def __init__(self):
             super().__init__()
             self._is_docker = os.environ.get('DOCKER_ENV') == 'true'
-            
+
         def emit(self, record):
             # 在Docker环境中，简化处理以避免循环
             if self._is_docker:
                 # 使用原始的logging输出，不进行重定向
                 print(f"[{record.levelname}] {record.getMessage()}")
                 return
-                
+
             # 获取对应的Loguru级别名称
             try:
                 level = logger.level(record.levelname).name
@@ -422,10 +420,7 @@ async def health_check():
         "scheduler_status": "running" if scheduler_manager and scheduler_manager.is_running else "stopped"
     }
 
-# 添加 API 密钥验证中间件
-app.add_middleware(APIKeyMiddleware)
-
-# 添加 CORS 中间件（放在API密钥中间件之后，这样CORS中间件会先执行）
+# 添加 CORS 中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 允许所有来源
@@ -462,7 +457,6 @@ app.include_router(data_sync.router, prefix="/data_sync", tags=["数据同步与
 app.include_router(favorite.router, prefix="/favorite", tags=["收藏夹管理"])
 app.include_router(popular_videos.router, prefix="/bilibili", tags=["B站热门"])
 app.include_router(bilibili_history_delete.router, prefix="/bilibili/history", tags=["B站历史记录删除"])
-app.include_router(api_security.router, prefix="/api/security", tags=["API安全"])
 
 # 入口点，启动应用
 if __name__ == "__main__":

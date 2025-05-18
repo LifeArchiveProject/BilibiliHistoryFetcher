@@ -95,11 +95,12 @@ server:
   ssl_enabled: false
   ssl_certfile: "你的fullchain.pem"
   ssl_keyfile: "你的privkey.pem"
-  # API安全配置
-  api_security:
-    enabled: true  # 是否启用API安全验证
-    api_key: "your-secret-api-key-change-this"# API密钥，请修改为复杂的随机字符串
-    excluded_paths: ["/health", "/api/security", "/docs", "/redoc", "/openapi.json"]  # 不需要验证API密钥的路径
+  # API安全配置已移除
+
+  # 数据完整性校验配置
+  data_integrity:
+    check_on_startup: false
+
 # 热力图配置
 heatmap:
   # 热力图输出目录
