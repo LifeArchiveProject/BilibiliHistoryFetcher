@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Tuple
 
 import requests
 from fastapi import APIRouter, HTTPException, Query
@@ -27,6 +27,237 @@ except ImportError:
 
 router = APIRouter()
 config = load_config()
+
+
+
+# 辅助函数：获取yutto可执行文件路径
+def get_yutto_path() -> str:
+    """
+    获取yutto可执行文件路径
+
+    Returns:
+        yutto可执行文件路径
+
+    Raises:
+        FileNotFoundError: 如果找不到yutto可执行文件
+    """
+    if getattr(sys, 'frozen', False):
+        # 如果是打包后的 exe 运行
+        base_path = os.path.dirname(sys.executable)
+        paths_to_try = [
+            os.path.join(base_path, 'yutto.exe'),  # 尝试主目录
+            os.path.join(base_path, '_internal', 'yutto.exe'),  # 尝试 _internal 目录
+            os.path.join(os.getcwd(), 'yutto.exe'),  # 尝试当前工作目录
+            os.path.join(os.getcwd(), '_internal', 'yutto.exe')  # 尝试当前工作目录的 _internal
+        ]
+
+        yutto_path = None
+        for path in paths_to_try:
+            print(f"尝试路径：{path}")
+            if os.path.exists(path):
+                yutto_path = path
+                print(f"找到 yutto.exe: {path}")
+                break
+
+        if yutto_path is None:
+            raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{', '.join(paths_to_try)}")
+    else:
+        # 如果是直接运行 python 脚本
+        yutto_path = 'yutto'
+        print(f"使用命令：{yutto_path}")
+
+    if not os.path.exists(yutto_path) and getattr(sys, 'frozen', False):
+        raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{yutto_path}")
+
+    return yutto_path
+
+# 辅助函数：检查下载目录和临时目录
+def check_download_directories() -> Tuple[str, str]:
+    """
+    检查下载目录和临时目录是否存在且有写入权限
+
+    Returns:
+        下载目录和临时目录的路径元组
+
+    Raises:
+        HTTPException: 如果目录不存在或没有写入权限
+    """
+    download_dir = os.path.normpath(config['yutto']['basic']['dir'])
+    tmp_dir = os.path.normpath(config['yutto']['basic']['tmp_dir'])
+
+    # 创建目录（如果不存在）
+    os.makedirs(download_dir, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    # 检查目录权限
+    if not os.access(download_dir, os.W_OK):
+        raise HTTPException(
+            status_code=500,
+            detail=f"没有下载目录的写入权限：{download_dir}"
+        )
+    if not os.access(tmp_dir, os.W_OK):
+        raise HTTPException(
+            status_code=500,
+            detail=f"没有临时目录的写入权限：{tmp_dir}"
+        )
+
+    return download_dir, tmp_dir
+
+# 辅助函数：准备进程参数
+def prepare_process_kwargs() -> Dict[str, Any]:
+    """
+    准备进程参数
+
+    Returns:
+        进程参数字典
+    """
+    # 设置环境变量
+    env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUTF8'] = '1'
+    env['PYTHONUNBUFFERED'] = '1'  # 确保 Python 输出不被缓存
+
+    # 在 Linux 上确保 PATH 包含 python 环境
+    if sys.platform != 'win32':
+        env['PATH'] = f"{os.path.dirname(sys.executable)}:{env.get('PATH', '')}"
+        # 添加 virtualenv 的 site-packages 路径（如果存在）
+        site_packages = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), 'lib', 'python*/site-packages')
+        env['PYTHONPATH'] = f"{site_packages}:{env.get('PYTHONPATH', '')}"
+
+    # 准备进程参数
+    popen_kwargs = {
+        'stdout': subprocess.PIPE,
+        'stderr': subprocess.PIPE,
+        'encoding': 'utf-8',
+        'errors': 'replace',
+        'universal_newlines': True,
+        'env': env,
+        'bufsize': 1,  # 行缓冲
+        'shell': sys.platform != 'win32'  # 在非 Windows 系统上使用 shell
+    }
+
+    # 在 Windows 系统上添加 CREATE_NO_WINDOW 标志
+    if sys.platform == 'win32':
+        popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+        popen_kwargs['shell'] = False  # Windows 上不使用 shell
+
+    return popen_kwargs
+
+# 辅助函数：格式化命令
+def format_command(command: List[str]) -> str:
+    """
+    格式化命令，处理特殊字符
+
+    Args:
+        command: 命令列表
+
+    Returns:
+        格式化后的命令字符串
+    """
+    if sys.platform != 'win32':
+        return ' '.join(f"'{arg}'" if ((' ' in arg) or ("'" in arg) or ('"' in arg)) else arg for arg in command)
+    return ' '.join(command)
+
+# 辅助函数：添加下载参数到命令
+def add_download_params_to_command(command: List[str], params: Any) -> List[str]:
+    """
+    将下载参数添加到命令中
+
+    Args:
+        command: 命令列表
+        params: 包含下载参数的对象
+
+    Returns:
+        添加了下载参数的命令列表
+    """
+    # 基础参数
+    # 视频清晰度
+    if params.video_quality is not None:
+        command.extend(['--video-quality', str(params.video_quality)])
+
+    # 音频码率
+    if params.audio_quality is not None:
+        command.extend(['--audio-quality', str(params.audio_quality)])
+
+    # 视频编码
+    if params.vcodec:
+        command.extend(['--vcodec', params.vcodec])
+
+    # 音频编码
+    if params.acodec:
+        command.extend(['--acodec', params.acodec])
+
+    # 视频下载编码优先级
+    if params.download_vcodec_priority:
+        command.extend(['--download-vcodec-priority', params.download_vcodec_priority])
+
+    # 输出格式
+    if params.output_format:
+        command.extend(['--output-format', params.output_format])
+
+    # 仅包含音频流时的输出格式
+    if params.output_format_audio_only:
+        command.extend(['--output-format-audio-only', params.output_format_audio_only])
+
+    # 资源选择参数
+    # 仅下载视频流
+    if params.video_only:
+        command.append('--video-only')
+
+    # 仅下载音频流
+    if params.only_audio:
+        command.append('--audio-only')
+
+    # 不生成弹幕文件
+    if params.no_danmaku:
+        command.append('--no-danmaku')
+
+    # 仅生成弹幕文件
+    if params.danmaku_only:
+        command.append('--danmaku-only')
+
+    # 不生成字幕文件
+    if params.no_subtitle or not config['yutto']['resource']['require_subtitle']:
+        command.append('--no-subtitle')
+
+    # 仅生成字幕文件
+    if params.subtitle_only:
+        command.append('--subtitle-only')
+
+    # 仅生成媒体元数据文件
+    if params.metadata_only:
+        command.append('--metadata-only')
+
+    # 不生成视频封面
+    if not params.download_cover:
+        command.append('--no-cover')
+
+    # 生成视频流封面时单独保存封面
+    if params.save_cover:
+        command.append('--save-cover')
+
+    # 仅生成视频封面
+    if params.cover_only:
+        command.append('--cover-only')
+
+    # 不生成章节信息
+    if params.no_chapter_info:
+        command.append('--no-chapter-info')
+
+    # 添加其他 yutto 配置
+    if config['yutto']['danmaku']['font_size']:
+        command.extend(['--danmaku-font-size', str(config['yutto']['danmaku']['font_size'])])
+
+    if config['yutto']['batch']['with_section']:
+        command.append('--with-section')
+
+    # 如果提供了 SESSDATA，添加到命令中
+    if hasattr(params, 'sessdata') and params.sessdata:
+        command.extend(['--sessdata', params.sessdata])
+    elif config.get('SESSDATA'):
+        command.extend(['--sessdata', config['SESSDATA']])
+
+    return command
 
 def extract_datetime_from_string(text):
     """
@@ -86,85 +317,58 @@ def extract_datetime_from_string(text):
     print(f"【时间提取】未能从'{text}'中提取日期时间")
     return None
 
-class DownloadRequest(BaseModel):
-    url: str
+# 基础下载参数模型类
+class BaseDownloadParams(BaseModel):
+    """所有下载请求的基础参数"""
     sessdata: Optional[str] = Field(None, description="用户的 SESSDATA")
     download_cover: Optional[bool] = Field(True, description="是否下载视频封面")
     only_audio: Optional[bool] = Field(False, description="是否仅下载音频")
+
+    # 基础参数
+    video_quality: Optional[int] = Field(None, description="视频清晰度等级，可选值：127|126|125|120|116|112|100|80|74|64|32|16")
+    audio_quality: Optional[int] = Field(None, description="音频码率等级，可选值：30251|30255|30250|30280|30232|30216")
+    vcodec: Optional[str] = Field(None, description="视频编码，格式为'下载编码:保存编码'，如'avc:copy'")
+    acodec: Optional[str] = Field(None, description="音频编码，格式为'下载编码:保存编码'，如'mp4a:copy'")
+    download_vcodec_priority: Optional[str] = Field(None, description="视频下载编码优先级，如'hevc,avc,av1'")
+    output_format: Optional[str] = Field(None, description="输出格式，可选值：infer|mp4|mkv|mov")
+    output_format_audio_only: Optional[str] = Field(None, description="仅包含音频流时的输出格式，可选值：infer|m4a|aac|mp3|flac|mp4|mkv|mov")
+
+    # 资源选择参数
+    video_only: Optional[bool] = Field(False, description="是否仅下载视频流")
+    danmaku_only: Optional[bool] = Field(False, description="是否仅生成弹幕文件")
+    no_danmaku: Optional[bool] = Field(False, description="是否不生成弹幕文件")
+    subtitle_only: Optional[bool] = Field(False, description="是否仅生成字幕文件")
+    no_subtitle: Optional[bool] = Field(False, description="是否不生成字幕文件")
+    metadata_only: Optional[bool] = Field(False, description="是否仅生成媒体元数据文件")
+    save_cover: Optional[bool] = Field(False, description="生成视频流封面时是否单独保存封面")
+    cover_only: Optional[bool] = Field(False, description="是否仅生成视频封面")
+    no_chapter_info: Optional[bool] = Field(False, description="是否不生成章节信息")
+
+class DownloadRequest(BaseDownloadParams):
+    """单个视频下载请求"""
+    url: str = Field(..., description="视频URL")
     cid: int = Field(..., description="视频的 CID，用于分类存储和音频文件命名前缀")
 
-    # 基础参数
-    video_quality: Optional[int] = Field(None, description="视频清晰度等级，可选值：127|126|125|120|116|112|100|80|74|64|32|16")
-    audio_quality: Optional[int] = Field(None, description="音频码率等级，可选值：30251|30255|30250|30280|30232|30216")
-    vcodec: Optional[str] = Field(None, description="视频编码，格式为'下载编码:保存编码'，如'avc:copy'")
-    acodec: Optional[str] = Field(None, description="音频编码，格式为'下载编码:保存编码'，如'mp4a:copy'")
-    download_vcodec_priority: Optional[str] = Field(None, description="视频下载编码优先级，如'hevc,avc,av1'")
-    output_format: Optional[str] = Field(None, description="输出格式，可选值：infer|mp4|mkv|mov")
-    output_format_audio_only: Optional[str] = Field(None, description="仅包含音频流时的输出格式，可选值：infer|m4a|aac|mp3|flac|mp4|mkv|mov")
-
-    # 资源选择参数
-    video_only: Optional[bool] = Field(False, description="是否仅下载视频流")
-    danmaku_only: Optional[bool] = Field(False, description="是否仅生成弹幕文件")
-    no_danmaku: Optional[bool] = Field(False, description="是否不生成弹幕文件")
-    subtitle_only: Optional[bool] = Field(False, description="是否仅生成字幕文件")
-    no_subtitle: Optional[bool] = Field(False, description="是否不生成字幕文件")
-    metadata_only: Optional[bool] = Field(False, description="是否仅生成媒体元数据文件")
-    save_cover: Optional[bool] = Field(False, description="生成视频流封面时是否单独保存封面")
-    cover_only: Optional[bool] = Field(False, description="是否仅生成视频封面")
-    no_chapter_info: Optional[bool] = Field(False, description="是否不生成章节信息")
-
-class UserSpaceDownloadRequest(BaseModel):
+class UserSpaceDownloadRequest(BaseDownloadParams):
+    """用户空间视频下载请求"""
     user_id: str = Field(..., description="用户 UID，例如：100969474")
-    sessdata: Optional[str] = Field(None, description="用户的 SESSDATA")
-    download_cover: Optional[bool] = Field(True, description="是否下载视频封面")
-    only_audio: Optional[bool] = Field(False, description="是否仅下载音频")
 
-    # 基础参数
-    video_quality: Optional[int] = Field(None, description="视频清晰度等级，可选值：127|126|125|120|116|112|100|80|74|64|32|16")
-    audio_quality: Optional[int] = Field(None, description="音频码率等级，可选值：30251|30255|30250|30280|30232|30216")
-    vcodec: Optional[str] = Field(None, description="视频编码，格式为'下载编码:保存编码'，如'avc:copy'")
-    acodec: Optional[str] = Field(None, description="音频编码，格式为'下载编码:保存编码'，如'mp4a:copy'")
-    download_vcodec_priority: Optional[str] = Field(None, description="视频下载编码优先级，如'hevc,avc,av1'")
-    output_format: Optional[str] = Field(None, description="输出格式，可选值：infer|mp4|mkv|mov")
-    output_format_audio_only: Optional[str] = Field(None, description="仅包含音频流时的输出格式，可选值：infer|m4a|aac|mp3|flac|mp4|mkv|mov")
-
-    # 资源选择参数
-    video_only: Optional[bool] = Field(False, description="是否仅下载视频流")
-    danmaku_only: Optional[bool] = Field(False, description="是否仅生成弹幕文件")
-    no_danmaku: Optional[bool] = Field(False, description="是否不生成弹幕文件")
-    subtitle_only: Optional[bool] = Field(False, description="是否仅生成字幕文件")
-    no_subtitle: Optional[bool] = Field(False, description="是否不生成字幕文件")
-    metadata_only: Optional[bool] = Field(False, description="是否仅生成媒体元数据文件")
-    save_cover: Optional[bool] = Field(False, description="生成视频流封面时是否单独保存封面")
-    cover_only: Optional[bool] = Field(False, description="是否仅生成视频封面")
-    no_chapter_info: Optional[bool] = Field(False, description="是否不生成章节信息")
-
-class FavoriteDownloadRequest(BaseModel):
+class FavoriteDownloadRequest(BaseDownloadParams):
+    """收藏夹下载请求"""
     user_id: str = Field(..., description="用户 UID，例如：100969474")
     fid: Optional[str] = Field(None, description="收藏夹 ID，不提供时下载所有收藏夹")
-    sessdata: Optional[str] = Field(None, description="用户的 SESSDATA")
-    download_cover: Optional[bool] = Field(True, description="是否下载视频封面")
-    only_audio: Optional[bool] = Field(False, description="是否仅下载音频")
 
-    # 基础参数
-    video_quality: Optional[int] = Field(None, description="视频清晰度等级，可选值：127|126|125|120|116|112|100|80|74|64|32|16")
-    audio_quality: Optional[int] = Field(None, description="音频码率等级，可选值：30251|30255|30250|30280|30232|30216")
-    vcodec: Optional[str] = Field(None, description="视频编码，格式为'下载编码:保存编码'，如'avc:copy'")
-    acodec: Optional[str] = Field(None, description="音频编码，格式为'下载编码:保存编码'，如'mp4a:copy'")
-    download_vcodec_priority: Optional[str] = Field(None, description="视频下载编码优先级，如'hevc,avc,av1'")
-    output_format: Optional[str] = Field(None, description="输出格式，可选值：infer|mp4|mkv|mov")
-    output_format_audio_only: Optional[str] = Field(None, description="仅包含音频流时的输出格式，可选值：infer|m4a|aac|mp3|flac|mp4|mkv|mov")
+class VideoInfo(BaseModel):
+    """视频信息"""
+    bvid: str = Field(..., description="视频的 BVID")
+    cid: int = Field(..., description="视频的 CID")
+    title: Optional[str] = Field(None, description="视频标题")
+    author: Optional[str] = Field(None, description="视频作者")
+    cover: Optional[str] = Field(None, description="视频封面URL")
 
-    # 资源选择参数
-    video_only: Optional[bool] = Field(False, description="是否仅下载视频流")
-    danmaku_only: Optional[bool] = Field(False, description="是否仅生成弹幕文件")
-    no_danmaku: Optional[bool] = Field(False, description="是否不生成弹幕文件")
-    subtitle_only: Optional[bool] = Field(False, description="是否仅生成字幕文件")
-    no_subtitle: Optional[bool] = Field(False, description="是否不生成字幕文件")
-    metadata_only: Optional[bool] = Field(False, description="是否仅生成媒体元数据文件")
-    save_cover: Optional[bool] = Field(False, description="生成视频流封面时是否单独保存封面")
-    cover_only: Optional[bool] = Field(False, description="是否仅生成视频封面")
-    no_chapter_info: Optional[bool] = Field(False, description="是否不生成章节信息")
+class BatchDownloadRequest(BaseDownloadParams):
+    """批量下载请求"""
+    videos: List[VideoInfo] = Field(..., description="要下载的视频列表")
 
 async def stream_process_output(process: subprocess.Popen):
     """实时流式输出进程的输出"""
@@ -231,84 +435,13 @@ async def download_video(request: DownloadRequest):
         request: 包含视频 URL 和可选 SESSDATA 的请求对象
     """
     try:
-        # 检查登录状态
-        if config['yutto']['basic']['login_strict']:
-            sessdata = request.sessdata or config.get('SESSDATA')
-            if not sessdata:
-                raise HTTPException(
-                    status_code=401,
-                    detail="未登录：当前设置要求必须登录才能下载视频"
-                )
-
-            # 验证 SESSDATA 是否有效
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Cookie': f'SESSDATA={sessdata}'
-            }
-
-            response = requests.get(
-                'https://api.bilibili.com/x/web-interface/nav',
-                headers=headers,
-                timeout=10
-            )
-
-            data = response.json()
-            if data.get('code') != 0:
-                raise HTTPException(
-                    status_code=401,
-                    detail="登录已失效：请重新登录"
-                )
-
         # 获取 yutto 可执行文件路径
-        if getattr(sys, 'frozen', False):
-            # 如果是打包后的 exe 运行
-            base_path = os.path.dirname(sys.executable)
-            paths_to_try = [
-                os.path.join(base_path, 'yutto.exe'),  # 尝试主目录
-                os.path.join(base_path, '_internal', 'yutto.exe'),  # 尝试 _internal 目录
-                os.path.join(os.getcwd(), 'yutto.exe'),  # 尝试当前工作目录
-                os.path.join(os.getcwd(), '_internal', 'yutto.exe')  # 尝试当前工作目录的 _internal
-            ]
+        yutto_path = get_yutto_path()
 
-            yutto_path = None
-            for path in paths_to_try:
-                print(f"尝试路径：{path}")
-                if os.path.exists(path):
-                    yutto_path = path
-                    print(f"找到 yutto.exe: {path}")
-                    break
+        # 检查下载目录和临时目录
+        download_dir, tmp_dir = check_download_directories()
 
-            if yutto_path is None:
-                raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{', '.join(paths_to_try)}")
-        else:
-            # 如果是直接运行 python 脚本
-            yutto_path = 'yutto'
-            print(f"使用命令：{yutto_path}")
-
-        if not os.path.exists(yutto_path) and getattr(sys, 'frozen', False):
-            raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{yutto_path}")
-
-        # 构建命令
-        # 确保下载目录和临时目录存在且有正确的权限
-        download_dir = os.path.normpath(config['yutto']['basic']['dir'])
-        tmp_dir = os.path.normpath(config['yutto']['basic']['tmp_dir'])
-
-        # 创建目录（如果不存在）
-        os.makedirs(download_dir, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-
-        # 检查目录权限
-        if not os.access(download_dir, os.W_OK):
-            raise HTTPException(
-                status_code=500,
-                detail=f"没有下载目录的写入权限：{download_dir}"
-            )
-        if not os.access(tmp_dir, os.W_OK):
-            raise HTTPException(
-                status_code=500,
-                detail=f"没有临时目录的写入权限：{tmp_dir}"
-            )
-
+        # 构建基本命令
         command = [
             yutto_path,
             request.url,
@@ -318,255 +451,28 @@ async def download_video(request: DownloadRequest):
             '--with-metadata'  # 添加元数据文件保存
         ]
 
-        # 基础参数
-        # 视频清晰度
-        if request.video_quality is not None:
-            command.extend(['--video-quality', str(request.video_quality)])
-
-        # 音频码率
-        if request.audio_quality is not None:
-            command.extend(['--audio-quality', str(request.audio_quality)])
-
-        # 视频编码
-        if request.vcodec:
-            command.extend(['--vcodec', request.vcodec])
-
-        # 音频编码
-        if request.acodec:
-            command.extend(['--acodec', request.acodec])
-
-        # 视频下载编码优先级
-        if request.download_vcodec_priority:
-            command.extend(['--download-vcodec-priority', request.download_vcodec_priority])
-
-        # 输出格式
-        if request.output_format:
-            command.extend(['--output-format', request.output_format])
-
-        # 仅包含音频流时的输出格式
-        if request.output_format_audio_only:
-            command.extend(['--output-format-audio-only', request.output_format_audio_only])
-
-        # 资源选择参数
-        # 仅下载视频流
-        if request.video_only:
-            command.append('--video-only')
-
-        # 仅下载音频流
-        if request.only_audio:
-            command.append('--audio-only')
-
-        # 不生成弹幕文件
-        if request.no_danmaku:
-            command.append('--no-danmaku')
-
-        # 仅生成弹幕文件
-        if request.danmaku_only:
-            command.append('--danmaku-only')
-
-        # 不生成字幕文件
-        if request.no_subtitle or not config['yutto']['resource']['require_subtitle']:
-            command.append('--no-subtitle')
-
-        # 仅生成字幕文件
-        if request.subtitle_only:
-            command.append('--subtitle-only')
-
-        # 仅生成媒体元数据文件
-        if request.metadata_only:
-            command.append('--metadata-only')
-
-        # 不生成视频封面
-        if not request.download_cover:
-            command.append('--no-cover')
-
-        # 生成视频流封面时单独保存封面
-        if request.save_cover:
-            command.append('--save-cover')
-
-        # 仅生成视频封面
-        if request.cover_only:
-            command.append('--cover-only')
-
-        # 不生成章节信息
-        if request.no_chapter_info:
-            command.append('--no-chapter-info')
-
-        # 添加其他 yutto 配置
-        if config['yutto']['danmaku']['font_size']:
-            command.extend(['--danmaku-font-size', str(config['yutto']['danmaku']['font_size'])])
-
-        if config['yutto']['batch']['with_section']:
-            command.append('--with-section')
-
-        # 如果提供了 SESSDATA，添加到命令中
-        if request.sessdata:
-            command.extend(['--sessdata', request.sessdata])
-        elif config.get('SESSDATA'):
-            command.extend(['--sessdata', config['SESSDATA']])
-
-        # 设置环境变量
-        env = os.environ.copy()
-        env['PYTHONIOENCODING'] = 'utf-8'
-        env['PYTHONUTF8'] = '1'
-        env['PYTHONUNBUFFERED'] = '1'  # 确保 Python 输出不被缓存
-
-        # 在 Linux 上确保 PATH 包含 python 环境
-        if sys.platform != 'win32':
-            env['PATH'] = f"{os.path.dirname(sys.executable)}:{env.get('PATH', '')}"
-            # 添加 virtualenv 的 site-packages 路径（如果存在）
-            site_packages = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), 'lib', 'python*/site-packages')
-            env['PYTHONPATH'] = f"{site_packages}:{env.get('PYTHONPATH', '')}"
+        # 添加下载参数
+        command = add_download_params_to_command(command, request)
 
         # 准备进程参数
-        popen_kwargs = {
-            'stdout': subprocess.PIPE,
-            'stderr': subprocess.PIPE,
-            'encoding': 'utf-8',
-            'errors': 'replace',
-            'universal_newlines': True,
-            'env': env,
-            'bufsize': 1,  # 行缓冲
-            'shell': sys.platform != 'win32'  # 在非 Windows 系统上使用 shell
-        }
+        popen_kwargs = prepare_process_kwargs()
 
-        # 在 Windows 系统上添加 CREATE_NO_WINDOW 标志
+        # 格式化命令
+        command_str = format_command(command)
+
+        # 执行命令
+        print(f"执行下载命令：{command_str}")
+
         if sys.platform == 'win32':
-            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-            popen_kwargs['shell'] = False  # Windows 上不使用 shell
+            process = subprocess.Popen(command, **popen_kwargs)
+        else:
+            process = subprocess.Popen(command_str, **popen_kwargs)
 
-        # 在 Linux 上将命令列表转换为字符串，同时处理特殊字符
-        command_str = None
-        if sys.platform != 'win32':
-            command_str = ' '.join(f"'{arg}'" if ((' ' in arg) or ("'" in arg) or ('"' in arg)) else arg for arg in command)
-
-        try:
-            # 执行命令，使用流式输出
-            if sys.platform != 'win32':
-                # 检查 FFmpeg 是否安装
-                try:
-                    ffmpeg_process = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
-                    if ffmpeg_process.returncode != 0:
-                        print("FFmpeg 未安装，需要手动安装...")
-                        print(f"which ffmpeg 返回值：{ffmpeg_process.returncode}")
-                        print(f"which ffmpeg 输出：{ffmpeg_process.stdout}")
-                        print(f"which ffmpeg 错误：{ffmpeg_process.stderr}")
-
-                        # 检测系统类型
-                        os_release = ""
-                        try:
-                            with open('/etc/os-release', 'r') as f:
-                                os_release = f.read().lower()
-                        except Exception as e:
-                            print(f"读取/etc/os-release 失败：{str(e)}")
-
-                        # 准备安装指南
-                        install_guide = "请按照以下步骤安装 FFmpeg:\n\n"
-
-                        if os.path.exists('/etc/centos-release') or 'centos' in os_release:
-                            install_guide += "CentOS 7 安装步骤:\n\n"
-                            install_guide += "1. 安装 EPEL 仓库:\n"
-                            install_guide += "yum install -y epel-release\n\n"
-                            install_guide += "2. 安装 RPM Fusion 仓库:\n"
-                            install_guide += "yum localinstall -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm\n\n"
-                            install_guide += "3. 安装 FFmpeg:\n"
-                            install_guide += "yum install -y ffmpeg ffmpeg-devel"
-
-                        elif os.path.exists('/etc/debian_version') or 'ubuntu' in os_release or 'debian' in os_release:
-                            install_guide += "Ubuntu/Debian 安装步骤:\n"
-                            install_guide += "1. 更新包列表:\n"
-                            install_guide += "apt-get update\n\n"
-                            install_guide += "2. 安装 FFmpeg:\n"
-                            install_guide += "apt-get install -y ffmpeg"
-
-                        else:
-                            install_guide += "未能识别的 Linux 发行版，请访问 FFmpeg 官网获取安装指南：\n"
-                            install_guide += "https://ffmpeg.org/download.html"
-
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"FFmpeg 未安装\n\n{install_guide}"
-                        )
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"检查 FFmpeg 失败：{str(e)}\n请确保 FFmpeg 已正确安装并添加到系统 PATH 中"
-                    )
-
-                print(f"\n=== 执行命令 ===")
-                print(f"命令：{command_str}")
-                print(f"工作目录：{os.getcwd()}")
-                print(f"yutto 路径：{yutto_path}")
-                print(f"yutto 是否存在：{os.path.exists(yutto_path)}")
-                print(f"yutto 是否可执行：{os.access(yutto_path, os.X_OK)}")
-                print(f"\n环境变量：")
-                for key, value in env.items():
-                    print(f"{key}: {value}")
-
-                # 检查 yutto 命令
-                try:
-                    version_process = subprocess.run(['yutto', '--version'], capture_output=True, text=True)
-                    print(f"\nyutto 版本信息：")
-                    print(version_process.stdout)
-                    if version_process.stderr:
-                        print(f"yutto 版本检查错误：{version_process.stderr}")
-                except Exception as e:
-                    print(f"检查 yutto 版本失败：{str(e)}")
-
-                process = subprocess.Popen(
-                    command_str,
-                    **popen_kwargs
-                )
-            else:
-                process = subprocess.Popen(
-                    command,
-                    **popen_kwargs
-                )
-
-            # 返回 SSE 响应
-            return StreamingResponse(
-                stream_process_output(process),
-                media_type="text/event-stream"
-            )
-        except Exception as e:
-            # 记录详细的错误信息
-            error_msg = f"命令执行失败：{str(e)}\n"
-            error_msg += f"命令：{command if sys.platform == 'win32' else (command_str if command_str else ' '.join(command))}\n"
-            error_msg += f"环境变量:\n"
-            error_msg += f"PATH: {env.get('PATH')}\n"
-            error_msg += f"PYTHONPATH: {env.get('PYTHONPATH')}\n"
-            error_msg += f"下载目录：{download_dir} (可写：{os.access(download_dir, os.W_OK)})\n"
-            error_msg += f"临时目录：{tmp_dir} (可写：{os.access(tmp_dir, os.W_OK)})"
-
-            # 添加系统信息
-            import platform
-            error_msg += f"\n\n系统信息:\n"
-            error_msg += f"操作系统：{platform.system()} {platform.release()}\n"
-            error_msg += f"Python 版本：{sys.version}\n"
-            error_msg += f"工作目录：{os.getcwd()}\n"
-            error_msg += f"yutto 路径：{yutto_path}\n"
-            error_msg += f"yutto 是否存在：{os.path.exists(yutto_path)}\n"
-            error_msg += f"yutto 是否可执行：{os.access(yutto_path, os.X_OK)}"
-
-            # 添加 FFmpeg 信息
-            try:
-                ffmpeg_process = subprocess.run(['which', 'ffmpeg'], capture_output=True, text=True)
-                error_msg += f"\n\nFFmpeg 信息:\n"
-                if ffmpeg_process.returncode == 0:
-                    ffmpeg_path = ffmpeg_process.stdout.strip()
-                    error_msg += f"FFmpeg 路径：{ffmpeg_path}\n"
-                    # 获取 FFmpeg 版本
-                    version_process = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
-                    if version_process.returncode == 0:
-                        error_msg += f"FFmpeg 版本：{version_process.stdout.splitlines()[0]}\n"
-            except Exception as ffmpeg_error:
-                error_msg += f"\n\nFFmpeg 检查失败：{str(ffmpeg_error)}"
-
-            raise HTTPException(
-                status_code=500,
-                detail=error_msg
-            )
-
+        # 返回 SSE 响应
+        return StreamingResponse(
+            stream_process_output(process),
+            media_type="text/event-stream"
+        )
     except FileNotFoundError:
         raise HTTPException(
             status_code=500,
@@ -585,7 +491,7 @@ async def check_ffmpeg():
 
     Returns:
         如果安装了 FFmpeg，返回版本信息
-        如果未安装，返回安装指南
+        如果未安装，返回简单的未安装信息
     """
     try:
         # 获取系统信息
@@ -624,64 +530,11 @@ async def check_ffmpeg():
                     "os_info": os_info
                 }
 
-        # FFmpeg 未安装，准备安装指南
-        os_release = ""
-        try:
-            if os.path.exists('/etc/os-release'):
-                with open('/etc/os-release', 'r') as f:
-                    os_release = f.read().lower()
-        except Exception as e:
-            print(f"读取/etc/os-release 失败：{str(e)}")
-
-        install_guide = "请按照以下步骤安装 FFmpeg:\n\n"
-
-        if system == 'darwin':  # macOS
-            install_guide += "macOS 安装步骤:\n\n"
-            install_guide += "1. 使用 Homebrew 安装:\n"
-            install_guide += "brew install ffmpeg\n\n"
-            install_guide += "如果没有安装 Homebrew，请先安装 Homebrew:\n"
-            install_guide += '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-
-        elif system == 'linux':
-            if os.path.exists('/etc/centos-release') or 'centos' in os_release:
-                install_guide += "CentOS 7 安装步骤:\n\n"
-                install_guide += "1. 安装 EPEL 仓库:\n"
-                install_guide += "yum install -y epel-release\n\n"
-                install_guide += "2. 安装 RPM Fusion 仓库:\n"
-                install_guide += "yum localinstall -y --nogpgcheck https://download1.rpmfusion.org/free/el/rpmfusion-free-release-7.noarch.rpm\n\n"
-                install_guide += "3. 安装 FFmpeg:\n"
-                install_guide += "yum install -y ffmpeg ffmpeg-devel"
-
-            elif os.path.exists('/etc/debian_version') or 'ubuntu' in os_release or 'debian' in os_release:
-                install_guide += "Ubuntu/Debian 安装步骤:\n"
-                install_guide += "1. 更新包列表:\n"
-                install_guide += "apt-get update\n\n"
-                install_guide += "2. 安装 FFmpeg:\n"
-                install_guide += "apt-get install -y ffmpeg"
-
-            else:
-                install_guide += "未能识别的 Linux 发行版，请访问 FFmpeg 官网获取安装指南：\n"
-                install_guide += "https://ffmpeg.org/download.html"
-
-        elif system == 'windows':
-            install_guide += "Windows 安装步骤:\n\n"
-            install_guide += "1. 使用 Scoop 安装 (推荐):\n"
-            install_guide += "scoop install ffmpeg\n\n"
-            install_guide += "如果没有安装 Scoop，请先安装 Scoop:\n"
-            install_guide += "Set-ExecutionPolicy RemoteSigned -Scope CurrentUser\n"
-            install_guide += 'irm get.scoop.sh | iex\n\n'
-            install_guide += "2. 或者访问 FFmpeg 官网下载可执行文件:\n"
-            install_guide += "https://ffmpeg.org/download.html#build-windows"
-
-        else:
-            install_guide += "未能识别的操作系统，请访问 FFmpeg 官网获取安装指南：\n"
-            install_guide += "https://ffmpeg.org/download.html"
-
+        # FFmpeg 未安装，返回简单的未安装信息
         return {
             "status": "error",
             "installed": False,
             "message": "FFmpeg 未安装",
-            "install_guide": install_guide,
             "os_info": os_info
         }
 
@@ -1573,87 +1426,16 @@ async def download_user_videos(request: UserSpaceDownloadRequest):
         request: 包含用户 ID 和可选 SESSDATA 的请求对象
     """
     try:
-        # 检查登录状态
-        if config['yutto']['basic']['login_strict']:
-            sessdata = request.sessdata or config.get('SESSDATA')
-            if not sessdata:
-                raise HTTPException(
-                    status_code=401,
-                    detail="未登录：当前设置要求必须登录才能下载视频"
-                )
-
-            # 验证 SESSDATA 是否有效
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Cookie': f'SESSDATA={sessdata}'
-            }
-
-            response = requests.get(
-                'https://api.bilibili.com/x/web-interface/nav',
-                headers=headers,
-                timeout=10
-            )
-
-            data = response.json()
-            if data.get('code') != 0:
-                raise HTTPException(
-                    status_code=401,
-                    detail="登录已失效：请重新登录"
-                )
-
         # 获取 yutto 可执行文件路径
-        if getattr(sys, 'frozen', False):
-            # 如果是打包后的 exe 运行
-            base_path = os.path.dirname(sys.executable)
-            paths_to_try = [
-                os.path.join(base_path, 'yutto.exe'),  # 尝试主目录
-                os.path.join(base_path, '_internal', 'yutto.exe'),  # 尝试 _internal 目录
-                os.path.join(os.getcwd(), 'yutto.exe'),  # 尝试当前工作目录
-                os.path.join(os.getcwd(), '_internal', 'yutto.exe')  # 尝试当前工作目录的 _internal
-            ]
+        yutto_path = get_yutto_path()
 
-            yutto_path = None
-            for path in paths_to_try:
-                print(f"尝试路径：{path}")
-                if os.path.exists(path):
-                    yutto_path = path
-                    print(f"找到 yutto.exe: {path}")
-                    break
-
-            if yutto_path is None:
-                raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{', '.join(paths_to_try)}")
-        else:
-            # 如果是直接运行 python 脚本
-            yutto_path = 'yutto'
-            print(f"使用命令：{yutto_path}")
-
-        if not os.path.exists(yutto_path) and getattr(sys, 'frozen', False):
-            raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{yutto_path}")
-
-        # 构建命令
-        # 确保下载目录和临时目录存在且有正确的权限
-        download_dir = os.path.normpath(config['yutto']['basic']['dir'])
-        tmp_dir = os.path.normpath(config['yutto']['basic']['tmp_dir'])
-
-        # 创建目录（如果不存在）
-        os.makedirs(download_dir, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-
-        # 检查目录权限
-        if not os.access(download_dir, os.W_OK):
-            raise HTTPException(
-                status_code=500,
-                detail=f"没有下载目录的写入权限：{download_dir}"
-            )
-        if not os.access(tmp_dir, os.W_OK):
-            raise HTTPException(
-                status_code=500,
-                detail=f"没有临时目录的写入权限：{tmp_dir}"
-            )
+        # 检查下载目录和临时目录
+        download_dir, tmp_dir = check_download_directories()
 
         # 构建用户空间 URL
         user_space_url = f"https://space.bilibili.com/{request.user_id}/video"
 
+        # 构建基本命令
         command = [
             yutto_path,
             user_space_url,
@@ -1664,130 +1446,17 @@ async def download_user_videos(request: UserSpaceDownloadRequest):
             '--with-metadata'  # 添加元数据文件保存
         ]
 
-        # 基础参数
-        # 视频清晰度
-        if request.video_quality is not None:
-            command.extend(['--video-quality', str(request.video_quality)])
-
-        # 音频码率
-        if request.audio_quality is not None:
-            command.extend(['--audio-quality', str(request.audio_quality)])
-
-        # 视频编码
-        if request.vcodec:
-            command.extend(['--vcodec', request.vcodec])
-
-        # 音频编码
-        if request.acodec:
-            command.extend(['--acodec', request.acodec])
-
-        # 视频下载编码优先级
-        if request.download_vcodec_priority:
-            command.extend(['--download-vcodec-priority', request.download_vcodec_priority])
-
-        # 输出格式
-        if request.output_format:
-            command.extend(['--output-format', request.output_format])
-
-        # 仅包含音频流时的输出格式
-        if request.output_format_audio_only:
-            command.extend(['--output-format-audio-only', request.output_format_audio_only])
-
-        # 资源选择参数
-        # 仅下载视频流
-        if request.video_only:
-            command.append('--video-only')
-
-        # 仅下载音频流
-        if request.only_audio:
-            command.append('--audio-only')
-
-        # 不生成弹幕文件
-        if request.no_danmaku:
-            command.append('--no-danmaku')
-
-        # 仅生成弹幕文件
-        if request.danmaku_only:
-            command.append('--danmaku-only')
-
-        # 不生成字幕文件
-        if request.no_subtitle or not config['yutto']['resource']['require_subtitle']:
-            command.append('--no-subtitle')
-
-        # 仅生成字幕文件
-        if request.subtitle_only:
-            command.append('--subtitle-only')
-
-        # 仅生成媒体元数据文件
-        if request.metadata_only:
-            command.append('--metadata-only')
-
-        # 不生成视频封面
-        if not request.download_cover:
-            command.append('--no-cover')
-
-        # 生成视频流封面时单独保存封面
-        if request.save_cover:
-            command.append('--save-cover')
-
-        # 仅生成视频封面
-        if request.cover_only:
-            command.append('--cover-only')
-
-        # 不生成章节信息
-        if request.no_chapter_info:
-            command.append('--no-chapter-info')
-
-        # 添加其他 yutto 配置
-        if config['yutto']['danmaku']['font_size']:
-            command.extend(['--danmaku-font-size', str(config['yutto']['danmaku']['font_size'])])
-
-        if config['yutto']['batch']['with_section']:
-            command.append('--with-section')
-
-        # 如果提供了 SESSDATA，添加到命令中
-        if request.sessdata:
-            command.extend(['--sessdata', request.sessdata])
-        elif config.get('SESSDATA'):
-            command.extend(['--sessdata', config['SESSDATA']])
-
-        # 设置环境变量
-        env = os.environ.copy()
-        env['PYTHONIOENCODING'] = 'utf-8'
-        env['PYTHONUTF8'] = '1'
-        env['PYTHONUNBUFFERED'] = '1'  # 确保 Python 输出不被缓存
-
-        # 在 Linux 上确保 PATH 包含 python 环境
-        if sys.platform != 'win32':
-            env['PATH'] = f"{os.path.dirname(sys.executable)}:{env.get('PATH', '')}"
-            # 添加 virtualenv 的 site-packages 路径（如果存在）
-            site_packages = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), 'lib', 'python*/site-packages')
-            env['PYTHONPATH'] = f"{site_packages}:{env.get('PYTHONPATH', '')}"
+        # 添加下载参数
+        command = add_download_params_to_command(command, request)
 
         # 准备进程参数
-        popen_kwargs = {
-            'stdout': subprocess.PIPE,
-            'stderr': subprocess.PIPE,
-            'encoding': 'utf-8',
-            'errors': 'replace',
-            'universal_newlines': True,
-            'env': env,
-            'bufsize': 1,  # 行缓冲
-            'shell': sys.platform != 'win32'  # 在非 Windows 系统上使用 shell
-        }
+        popen_kwargs = prepare_process_kwargs()
 
-        # 在 Windows 系统上添加 CREATE_NO_WINDOW 标志
-        if sys.platform == 'win32':
-            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-            popen_kwargs['shell'] = False  # Windows 上不使用 shell
-
-        # 在 Linux 上将命令列表转换为字符串，同时处理特殊字符
-        command_str = None
-        if sys.platform != 'win32':
-            command_str = ' '.join(f"'{arg}'" if ((' ' in arg) or ("'" in arg) or ('"' in arg)) else arg for arg in command)
+        # 格式化命令
+        command_str = format_command(command)
 
         # 执行命令
-        print(f"执行下载命令：{' '.join(command) if sys.platform == 'win32' else command_str}")
+        print(f"执行下载命令：{command_str}")
 
         if sys.platform == 'win32':
             process = subprocess.Popen(command, **popen_kwargs)
@@ -1805,6 +1474,96 @@ async def download_user_videos(request: UserSpaceDownloadRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"下载过程出错：{str(e)}")
 
+@router.post("/batch_download", summary="批量下载多个B站视频")
+async def batch_download(request: BatchDownloadRequest):
+    """
+    批量下载多个B站视频
+
+    Args:
+        request: 包含多个视频信息和下载选项的请求对象
+    """
+    try:
+        # 获取 yutto 可执行文件路径
+        yutto_path = get_yutto_path()
+
+        # 检查下载目录和临时目录
+        download_dir, tmp_dir = check_download_directories()
+
+        # 准备批量下载
+        total_videos = len(request.videos)
+        current_index = 0
+
+        # 创建一个异步生成器来处理批量下载
+        async def batch_download_generator():
+            nonlocal current_index
+
+            # 发送初始信息
+            yield f"data: 开始批量下载，共 {total_videos} 个视频\n\n"
+
+            for video in request.videos:
+                current_index += 1
+
+                # 发送当前下载信息
+                yield f"data: 正在下载第 {current_index}/{total_videos} 个视频: {video.title or video.bvid}\n\n"
+
+                # 构建视频URL
+                video_url = f"https://www.bilibili.com/video/{video.bvid}"
+
+                # 构建命令
+                command = [
+                    yutto_path,
+                    video_url,
+                    '--dir', download_dir,
+                    '--tmp-dir', tmp_dir,
+                    '--subpath-template', f'{{title}}_{{username}}_{{download_date@%Y%m%d_%H%M%S}}_{video.cid}/{{title}}_{video.cid}',
+                    '--with-metadata'  # 添加元数据文件保存
+                ]
+
+                # 添加下载参数
+                command = add_download_params_to_command(command, request)
+
+                # 准备进程参数
+                popen_kwargs = prepare_process_kwargs()
+
+                # 格式化命令
+                command_str = format_command(command)
+
+                try:
+                    # 执行命令
+                    print(f"执行下载命令：{command_str}")
+
+                    if sys.platform == 'win32':
+                        process = subprocess.Popen(command, **popen_kwargs)
+                    else:
+                        process = subprocess.Popen(command_str, **popen_kwargs)
+
+                    # 处理进程输出
+                    async for line in stream_process_output(process):
+                        yield line
+
+                    # 发送当前视频下载完成信息
+                    yield f"data: 第 {current_index}/{total_videos} 个视频下载完成: {video.title or video.bvid}\n\n"
+
+                except Exception as e:
+                    error_msg = f"下载视频 {video.bvid} 时出错：{str(e)}"
+                    print(error_msg)
+                    yield f"data: ERROR: {error_msg}\n\n"
+
+            # 发送批量下载完成信息
+            yield f"data: 批量下载完成，共 {total_videos} 个视频\n\n"
+            yield "event: close\ndata: close\n\n"
+
+        # 返回 SSE 响应
+        return StreamingResponse(
+            batch_download_generator(),
+            media_type="text/event-stream"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量下载过程出错：{str(e)}")
+
 @router.post("/download_favorites", summary="下载用户收藏夹视频")
 async def download_favorites(request: FavoriteDownloadRequest):
     """
@@ -1815,7 +1574,7 @@ async def download_favorites(request: FavoriteDownloadRequest):
         注意：不提供收藏夹 ID 时，将下载所有收藏夹
     """
     try:
-        # 检查登录状态
+        # 收藏夹必须登录
         sessdata = request.sessdata or config.get('SESSDATA')
         if not sessdata:
             raise HTTPException(
@@ -1823,74 +1582,11 @@ async def download_favorites(request: FavoriteDownloadRequest):
                 detail="未登录：下载收藏夹必须提供 SESSDATA"
             )
 
-        # 验证 SESSDATA 是否有效
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Cookie': f'SESSDATA={sessdata}'
-        }
-
-        response = requests.get(
-            'https://api.bilibili.com/x/web-interface/nav',
-            headers=headers,
-            timeout=10
-        )
-
-        data = response.json()
-        if data.get('code') != 0:
-            raise HTTPException(
-                status_code=401,
-                detail="登录已失效：请重新登录"
-            )
-
         # 获取 yutto 可执行文件路径
-        if getattr(sys, 'frozen', False):
-            # 如果是打包后的 exe 运行
-            base_path = os.path.dirname(sys.executable)
-            paths_to_try = [
-                os.path.join(base_path, 'yutto.exe'),  # 尝试主目录
-                os.path.join(base_path, '_internal', 'yutto.exe'),  # 尝试 _internal 目录
-                os.path.join(os.getcwd(), 'yutto.exe'),  # 尝试当前工作目录
-                os.path.join(os.getcwd(), '_internal', 'yutto.exe')  # 尝试当前工作目录的 _internal
-            ]
+        yutto_path = get_yutto_path()
 
-            yutto_path = None
-            for path in paths_to_try:
-                print(f"尝试路径：{path}")
-                if os.path.exists(path):
-                    yutto_path = path
-                    print(f"找到 yutto.exe: {path}")
-                    break
-
-            if yutto_path is None:
-                raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{', '.join(paths_to_try)}")
-        else:
-            # 如果是直接运行 python 脚本
-            yutto_path = 'yutto'
-            print(f"使用命令：{yutto_path}")
-
-        if not os.path.exists(yutto_path) and getattr(sys, 'frozen', False):
-            raise FileNotFoundError(f"找不到 yutto.exe，已尝试的路径：{yutto_path}")
-
-        # 构建命令
-        # 确保下载目录和临时目录存在且有正确的权限
-        download_dir = os.path.normpath(config['yutto']['basic']['dir'])
-        tmp_dir = os.path.normpath(config['yutto']['basic']['tmp_dir'])
-
-        # 创建目录（如果不存在）
-        os.makedirs(download_dir, exist_ok=True)
-        os.makedirs(tmp_dir, exist_ok=True)
-
-        # 检查目录权限
-        if not os.access(download_dir, os.W_OK):
-            raise HTTPException(
-                status_code=500,
-                detail=f"没有下载目录的写入权限：{download_dir}"
-            )
-        if not os.access(tmp_dir, os.W_OK):
-            raise HTTPException(
-                status_code=500,
-                detail=f"没有临时目录的写入权限：{tmp_dir}"
-            )
+        # 检查下载目录和临时目录
+        download_dir, tmp_dir = check_download_directories()
 
         # 构建收藏夹 URL
         if request.fid:
@@ -1900,6 +1596,7 @@ async def download_favorites(request: FavoriteDownloadRequest):
             # 所有收藏夹
             favorite_url = f"https://space.bilibili.com/{request.user_id}/favlist"
 
+        # 构建基本命令
         command = [
             yutto_path,
             favorite_url,
@@ -1910,127 +1607,21 @@ async def download_favorites(request: FavoriteDownloadRequest):
             '--with-metadata'  # 添加元数据文件保存
         ]
 
-        # 基础参数
-        # 视频清晰度
-        if request.video_quality is not None:
-            command.extend(['--video-quality', str(request.video_quality)])
+        # 添加下载参数
+        command = add_download_params_to_command(command, request)
 
-        # 音频码率
-        if request.audio_quality is not None:
-            command.extend(['--audio-quality', str(request.audio_quality)])
-
-        # 视频编码
-        if request.vcodec:
-            command.extend(['--vcodec', request.vcodec])
-
-        # 音频编码
-        if request.acodec:
-            command.extend(['--acodec', request.acodec])
-
-        # 视频下载编码优先级
-        if request.download_vcodec_priority:
-            command.extend(['--download-vcodec-priority', request.download_vcodec_priority])
-
-        # 输出格式
-        if request.output_format:
-            command.extend(['--output-format', request.output_format])
-
-        # 仅包含音频流时的输出格式
-        if request.output_format_audio_only:
-            command.extend(['--output-format-audio-only', request.output_format_audio_only])
-
-        # 资源选择参数
-        # 仅下载视频流
-        if request.video_only:
-            command.append('--video-only')
-
-        # 仅下载音频流
-        if request.only_audio:
-            command.append('--audio-only')
-
-        # 不生成弹幕文件
-        if request.no_danmaku:
-            command.append('--no-danmaku')
-
-        # 仅生成弹幕文件
-        if request.danmaku_only:
-            command.append('--danmaku-only')
-
-        # 不生成字幕文件
-        if request.no_subtitle or not config['yutto']['resource']['require_subtitle']:
-            command.append('--no-subtitle')
-
-        # 仅生成字幕文件
-        if request.subtitle_only:
-            command.append('--subtitle-only')
-
-        # 仅生成媒体元数据文件
-        if request.metadata_only:
-            command.append('--metadata-only')
-
-        # 不生成视频封面
-        if not request.download_cover:
-            command.append('--no-cover')
-
-        # 生成视频流封面时单独保存封面
-        if request.save_cover:
-            command.append('--save-cover')
-
-        # 仅生成视频封面
-        if request.cover_only:
-            command.append('--cover-only')
-
-        # 不生成章节信息
-        if request.no_chapter_info:
-            command.append('--no-chapter-info')
-
-        # 添加其他 yutto 配置
-        if config['yutto']['danmaku']['font_size']:
-            command.extend(['--danmaku-font-size', str(config['yutto']['danmaku']['font_size'])])
-
-        if config['yutto']['batch']['with_section']:
-            command.append('--with-section')
-
-        # 添加 SESSDATA
-        command.extend(['--sessdata', sessdata])
-
-        # 设置环境变量
-        env = os.environ.copy()
-        env['PYTHONIOENCODING'] = 'utf-8'
-        env['PYTHONUTF8'] = '1'
-        env['PYTHONUNBUFFERED'] = '1'  # 确保 Python 输出不被缓存
-
-        # 在 Linux 上确保 PATH 包含 python 环境
-        if sys.platform != 'win32':
-            env['PATH'] = f"{os.path.dirname(sys.executable)}:{env.get('PATH', '')}"
-            # 添加 virtualenv 的 site-packages 路径（如果存在）
-            site_packages = os.path.join(os.path.dirname(os.path.dirname(sys.executable)), 'lib', 'python*/site-packages')
-            env['PYTHONPATH'] = f"{site_packages}:{env.get('PYTHONPATH', '')}"
+        # 确保添加 SESSDATA (收藏夹必须登录)
+        if '--sessdata' not in command:
+            command.extend(['--sessdata', sessdata])
 
         # 准备进程参数
-        popen_kwargs = {
-            'stdout': subprocess.PIPE,
-            'stderr': subprocess.PIPE,
-            'encoding': 'utf-8',
-            'errors': 'replace',
-            'universal_newlines': True,
-            'env': env,
-            'bufsize': 1,  # 行缓冲
-            'shell': sys.platform != 'win32'  # 在非 Windows 系统上使用 shell
-        }
+        popen_kwargs = prepare_process_kwargs()
 
-        # 在 Windows 系统上添加 CREATE_NO_WINDOW 标志
-        if sys.platform == 'win32':
-            popen_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
-            popen_kwargs['shell'] = False  # Windows 上不使用 shell
-
-        # 在 Linux 上将命令列表转换为字符串，同时处理特殊字符
-        command_str = None
-        if sys.platform != 'win32':
-            command_str = ' '.join(f"'{arg}'" if ((' ' in arg) or ("'" in arg) or ('"' in arg)) else arg for arg in command)
+        # 格式化命令
+        command_str = format_command(command)
 
         # 执行命令
-        print(f"执行下载命令：{' '.join(command) if sys.platform == 'win32' else command_str}")
+        print(f"执行下载命令：{command_str}")
 
         if sys.platform == 'win32':
             process = subprocess.Popen(command, **popen_kwargs)
@@ -2336,9 +1927,9 @@ class SeasonInfoResponse(BaseModel):
 async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
     """
     获取视频观看时长信息
-    
+
     检查视频是否为合集中的视频，并返回合集信息及其中所有视频的详细信息
-    
+
     Args:
         bvid: 视频bvid
         sessdata: B站会话ID，用于获取需要登录才能访问的视频
@@ -2346,14 +1937,14 @@ async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
     try:
         # 首先调用现有的获取视频详情接口
         video_detail = await get_video_info(bvid=bvid, sessdata=sessdata)
-        
+
         # 如果获取视频详情失败，直接返回错误
         if video_detail.status != "success":
             return SeasonInfoResponse(
                 status="error",
                 message=f"获取视频信息失败: {video_detail.message}"
             )
-        
+
         # 检查视频是否属于某个合集
         video_data = video_detail.data
         if not video_data.get("season_id"):
@@ -2361,10 +1952,10 @@ async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
                 status="info",
                 message="该视频不属于任何合集"
             )
-        
+
         # 视频属于合集，获取合集信息
         season_id = video_data.get("season_id")
-        
+
         # 如果有ugc_season字段，从中提取合集信息
         season_info = video_data.get("ugc_season", {})
         if not season_info:
@@ -2373,22 +1964,22 @@ async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
                 message="无法获取合集信息",
                 season_id=season_id
             )
-        
+
         # 提取合集标题和封面
         season_title = season_info.get("title", "")
         season_cover = season_info.get("cover", "")
-        
+
         # 提取合集中的所有视频信息
         video_list = []
         sections = season_info.get("sections", [])
-        
+
         for section in sections:
             episodes = section.get("episodes", [])
             for episode in episodes:
                 # 提取所需的视频信息
                 arc = episode.get("arc", {})
                 page = episode.get("page", {})
-                
+
                 video_info = SeasonVideoInfo(
                     title=episode.get("title", ""),
                     cover=arc.get("pic", ""),
@@ -2400,7 +1991,7 @@ async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
                     cid=page.get("cid", 0)
                 )
                 video_list.append(video_info)
-        
+
         return SeasonInfoResponse(
             status="success",
             message="获取合集视频信息成功",
@@ -2409,7 +2000,7 @@ async def get_video_season_info(bvid: str, sessdata: Optional[str] = None):
             season_cover=season_cover,
             videos=video_list
         )
-            
+
     except Exception as e:
         return SeasonInfoResponse(
             status="error",
