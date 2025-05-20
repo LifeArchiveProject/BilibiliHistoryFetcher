@@ -1,5 +1,4 @@
 from typing import Optional, Union
-import logging
 
 from fastapi import APIRouter, Query, HTTPException, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
@@ -8,14 +7,15 @@ import time
 import json
 import asyncio
 import os
+from loguru import logger
 
 from scripts.bilibili_history import fetch_history, find_latest_local_history, fetch_and_compare_history, save_history, \
     load_cookie, fetch_video_details_only, get_invalid_videos_from_db, get_video_details_stats
 from scripts.import_sqlite import import_all_history_files
-from scripts.utils import load_config
+from scripts.utils import load_config, setup_logger
 
-# 配置日志记录
-logger = logging.getLogger(__name__)
+# 确保日志系统已初始化
+setup_logger()
 
 router = APIRouter()
 

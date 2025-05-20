@@ -26,17 +26,17 @@ POPULAR_API = "https://api.bilibili.com/x/web-interface/popular"
 def get_db_connection(year=None):
     """
     获取数据库连接，支持按年切分数据库
-    
+
     Args:
         year: 指定年份，如果为None则使用当前年份
-        
+
     Returns:
         SQLite数据库连接
     """
     # 如果未指定年份，使用当前年份
     if year is None:
         year = datetime.now().year
-        
+
     # 构建基于年份的数据库路径
     db_filename = f"bilibili_popular_{year}.db"
     db_path = get_database_path(db_filename)
@@ -44,7 +44,7 @@ def get_db_connection(year=None):
 
     # 创建表
     create_tables(conn)
-    
+
     print(f"已连接到{year}年的数据库: {db_path}")
     return conn
 
@@ -60,14 +60,14 @@ def get_all_year_dbs():
     db_dir = os.path.dirname(get_database_path(""))
     db_files = [f for f in os.listdir(db_dir) if f.startswith("bilibili_popular_") and f.endswith(".db")]
     years = []
-    
+
     for db_file in db_files:
         try:
             year = int(db_file.replace("bilibili_popular_", "").replace(".db", ""))
             years.append(year)
         except ValueError:
             continue
-            
+
     return sorted(years)
 
 # 获取多年数据库连接
@@ -80,14 +80,14 @@ def get_multi_year_connections(start_year=None, end_year=None):
             return {datetime.now().year: get_current_db_connection()}
     else:
         years = range(start_year, end_year + 1)
-    
+
     connections = {}
     for year in years:
         try:
             connections[year] = get_db_connection(year)
         except Exception as e:
             print(f"连接{year}年数据库出错: {e}")
-    
+
     return connections
 
 def create_tables(conn):
@@ -216,7 +216,7 @@ def create_tables(conn):
 
     conn.commit()
 
-def insert_video_to_db(conn, video: Dict[str, Any], fetch_time: int, rank: int = 0):
+def insert_video_to_db(conn, video: Dict[str, Any], fetch_time: int, rank: int = 0, auto_commit: bool = False):
     """
     将视频信息插入数据库
 
@@ -225,6 +225,7 @@ def insert_video_to_db(conn, video: Dict[str, Any], fetch_time: int, rank: int =
         video: 视频数据
         fetch_time: 抓取时间戳
         rank: 视频排名
+        auto_commit: 是否自动提交事务，默认为False，用于批量插入时由外部控制事务
     """
     cursor = conn.cursor()
 
@@ -341,16 +342,18 @@ def insert_video_to_db(conn, video: Dict[str, Any], fetch_time: int, rank: int =
         # 更新跟踪表
         update_tracking_info(conn, video, fetch_time, rank)
 
+        # 只有在auto_commit为True时才提交事务
+        if auto_commit:
+            conn.commit()
+
     except sqlite3.Error as e:
         print(f"插入数据库时出错: {e}")
-        # 回滚操作
-        conn.rollback()
+        # 如果auto_commit为True，则回滚操作
+        if auto_commit:
+            conn.rollback()
         raise
 
-    # 提交事务
-    conn.commit()
-
-def update_tracking_info(conn, video: Dict[str, Any], fetch_time: int, rank: int = 0):
+def update_tracking_info(conn, video: Dict[str, Any], fetch_time: int, rank: int = 0, auto_commit: bool = False):
     """
     更新视频热门跟踪信息
 
@@ -359,6 +362,7 @@ def update_tracking_info(conn, video: Dict[str, Any], fetch_time: int, rank: int
         video: 视频数据
         fetch_time: 抓取时间戳
         rank: 视频排名
+        auto_commit: 是否自动提交事务，默认为False，用于批量插入时由外部控制事务
     """
     cursor = conn.cursor()
 
@@ -408,8 +412,16 @@ def update_tracking_info(conn, video: Dict[str, Any], fetch_time: int, rank: int
                 aid, bvid, title, fetch_time, fetch_time, 1,
                 0, rank if rank > 0 else None, rank if rank > 0 else None, 1
             ))
+
+        # 只有在auto_commit为True时才提交事务
+        if auto_commit:
+            conn.commit()
+
     except sqlite3.Error as e:
         print(f"更新跟踪信息时出错: {e}")
+        # 如果auto_commit为True，则回滚操作
+        if auto_commit:
+            conn.rollback()
         raise
 
 def update_inactive_videos(conn, fetch_time: int):
@@ -533,8 +545,8 @@ def get_popular_videos(page_num: int = 1, page_size: int = 20) -> Dict[str, Any]
         return {"code": -1, "message": f"获取热门视频列表失败: {e}", "ttl": 0, "data": None}
 
 def get_all_popular_videos(
-    page_size: int = 20, 
-    max_pages: int = 100, 
+    page_size: int = 20,
+    max_pages: int = 100,
     save_to_db: bool = True,
     progress_callback = None
 ) -> Tuple[List[Dict[str, Any]], bool, Dict[str, Any]]:
@@ -562,6 +574,8 @@ def get_all_popular_videos(
     failed_count = 0
     duplicate_count = 0
     inactive_count = 0
+    # 用于收集所有要保存的视频数据
+    videos_to_save = []
 
     try:
         # 如果需要保存到数据库，建立连接
@@ -570,12 +584,12 @@ def get_all_popular_videos(
 
         while has_more and page_num <= max_pages:
             print(f"正在获取第 {page_num} 页数据...")
-            
+
             # 报告进度（如果提供了回调函数）
             estimated_progress = min(95, int((page_num / max_pages) * 100))
             if progress_callback:
                 progress_callback(
-                    estimated_progress, 
+                    estimated_progress,
                     f"正在获取第 {page_num} 页数据...",
                     page_num,
                     max_pages
@@ -592,11 +606,11 @@ def get_all_popular_videos(
             # 检查是否成功
             if data["code"] != 0 or not data.get("data"):
                 print(f"获取第 {page_num} 页数据失败: {data.get('message', '未知错误')}")
-                
+
                 # 报告错误（如果提供了回调函数）
                 if progress_callback:
                     progress_callback(
-                        estimated_progress, 
+                        estimated_progress,
                         f"获取第 {page_num} 页数据失败: {data.get('message', '未知错误')}",
                         page_num,
                         max_pages,
@@ -625,28 +639,13 @@ def get_all_popular_videos(
             if video_list:
                 total_items += len(video_list)
 
-                # 保存到数据库
-                if save_to_db and conn:
+                # 收集视频数据，但不立即写入数据库
+                if save_to_db:
                     for index, video in enumerate(video_list):
-                        try:
-                            # 检查是否已存在相同视频记录
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "SELECT 1 FROM popular_videos WHERE aid = ? AND bvid = ? AND fetch_time = ?",
-                                (video.get('aid'), video.get('bvid'), fetch_time)
-                            )
-                            exists = cursor.fetchone() is not None
-
-                            if exists:
-                                duplicate_count += 1
-                                print(f"跳过重复视频: {video.get('bvid')} - {video.get('title')}")
-                            else:
-                                # 计算当前视频的排名
-                                rank = (page_num - 1) * page_size + index + 1
-                                insert_video_to_db(conn, video, fetch_time, rank)
-                        except Exception as e:
-                            failed_count += 1
-                            print(f"保存视频 {video.get('bvid')} 时出错: {e}")
+                        # 计算当前视频的排名
+                        rank = (page_num - 1) * page_size + index + 1
+                        # 将视频和排名信息添加到待保存列表
+                        videos_to_save.append((video, rank))
 
                 # 提取视频信息并添加到总列表中
                 videos = extract_video_info(data)
@@ -654,11 +653,11 @@ def get_all_popular_videos(
 
                 # 输出当前获取进度
                 print(f"已获取 {len(all_videos)} 个视频")
-                
+
                 # 报告进度（如果提供了回调函数）
                 if progress_callback:
                     progress_callback(
-                        estimated_progress, 
+                        estimated_progress,
                         f"已获取 {len(all_videos)} 个视频",
                         page_num,
                         max_pages
@@ -672,25 +671,81 @@ def get_all_popular_videos(
                 page_num += 1
             else:
                 print("已获取全部热门视频数据")
-                
+
                 # 报告进度（如果提供了回调函数）
                 if progress_callback:
                     progress_callback(
-                        95, 
+                        95,
                         "已获取全部热门视频数据，正在处理...",
                         page_num,
                         page_num
                     )
 
+        # 一次性批量保存所有视频数据到数据库
+        if save_to_db and conn and videos_to_save:
+            print(f"开始一次性保存 {len(videos_to_save)} 个视频到数据库...")
+
+            # 报告进度（如果提供了回调函数）
+            if progress_callback:
+                progress_callback(
+                    96,
+                    f"正在保存 {len(videos_to_save)} 个视频到数据库...",
+                    page_num,
+                    page_num
+                )
+
+            # 开始事务
+            conn.execute("BEGIN TRANSACTION")
+
+            try:
+                cursor = conn.cursor()
+                for video, rank in videos_to_save:
+                    try:
+                        # 检查是否已存在相同视频记录
+                        cursor.execute(
+                            "SELECT 1 FROM popular_videos WHERE aid = ? AND bvid = ? AND fetch_time = ?",
+                            (video.get('aid'), video.get('bvid'), fetch_time)
+                        )
+                        exists = cursor.fetchone() is not None
+
+                        if exists:
+                            duplicate_count += 1
+                            print(f"跳过重复视频: {video.get('bvid')} - {video.get('title')}")
+                        else:
+                            # 插入视频数据，不自动提交事务
+                            insert_video_to_db(conn, video, fetch_time, rank, auto_commit=False)
+                    except Exception as e:
+                        failed_count += 1
+                        print(f"保存视频 {video.get('bvid')} 时出错: {e}")
+
+                # 提交事务
+                conn.execute("COMMIT")
+                print(f"成功保存 {len(videos_to_save) - failed_count - duplicate_count} 个视频到数据库")
+
+            except Exception as e:
+                # 回滚事务
+                conn.execute("ROLLBACK")
+                print(f"批量保存视频时出错，已回滚: {e}")
+                failed_count = len(videos_to_save)
+
+            # 报告进度（如果提供了回调函数）
+            if progress_callback:
+                progress_callback(
+                    97,
+                    f"已保存 {len(videos_to_save) - failed_count - duplicate_count} 个视频到数据库",
+                    page_num,
+                    page_num
+                )
+
         # 更新不再活跃的视频
         if save_to_db and conn:
             inactive_count = update_inactive_videos(conn, fetch_time)
             print(f"已更新 {inactive_count} 个不再活跃的视频")
-            
+
             # 报告进度（如果提供了回调函数）
             if progress_callback:
                 progress_callback(
-                    98, 
+                    98,
                     f"已更新 {inactive_count} 个不再活跃的视频",
                     max_pages,
                     max_pages
@@ -706,18 +761,18 @@ def get_all_popular_videos(
             "fetch_stats": {
                 "pages_fetched": page_num - 1,
                 "total_items": total_items,
-                "saved_successfully": len(all_videos),
+                "saved_successfully": len(all_videos) - failed_count - duplicate_count,
                 "failed_to_save": failed_count,
                 "duplicates_skipped": duplicate_count,
                 "inactive_updated": inactive_count,
                 "fetch_time": datetime.fromtimestamp(fetch_time).strftime("%Y-%m-%d %H:%M:%S")
             }
         }
-        
+
         # 报告完成（如果提供了回调函数）
         if progress_callback:
             progress_callback(
-                100, 
+                100,
                 "热门视频获取完成",
                 max_pages,
                 max_pages,
@@ -728,11 +783,11 @@ def get_all_popular_videos(
 
     except Exception as e:
         print(f"获取所有热门视频时出错: {e}")
-        
+
         # 报告错误（如果提供了回调函数）
         if progress_callback:
             progress_callback(
-                min(95, int((page_num / max_pages) * 100)), 
+                min(95, int((page_num / max_pages) * 100)),
                 f"获取热门视频时出错: {str(e)}",
                 page_num,
                 max_pages,
@@ -748,7 +803,7 @@ def get_all_popular_videos(
             "message": str(e),
             "pages_fetched": page_num - 1,
             "total_items": total_items,
-            "saved_successfully": len(all_videos),
+            "saved_successfully": len(all_videos) - failed_count - duplicate_count,
             "failed_to_save": failed_count,
             "duplicates_skipped": duplicate_count,
             "fetch_time": datetime.fromtimestamp(fetch_time).strftime("%Y-%m-%d %H:%M:%S")
@@ -916,11 +971,11 @@ def get_fetch_history(limit: int = 10) -> List[Dict[str, Any]]:
     """
     connections = {}
     history = []
-    
+
     try:
         # 获取所有年份的数据库连接
         connections = get_multi_year_connections()
-        
+
         # 从每个年份的数据库中查询抓取历史
         for year, conn in connections.items():
             cursor = conn.cursor()
@@ -930,7 +985,7 @@ def get_fetch_history(limit: int = 10) -> List[Dict[str, Any]]:
             ORDER BY fetch_time DESC
             LIMIT ?
             ''', (limit,))
-            
+
             rows = cursor.fetchall()
             for row in rows:
                 fetch_time = row[0]
@@ -942,10 +997,10 @@ def get_fetch_history(limit: int = 10) -> List[Dict[str, Any]]:
                     "success": bool(row[3]),
                     "year": year
                 })
-        
+
         # 按照fetch_time降序排序
         history.sort(key=lambda x: x["fetch_time"], reverse=True)
-        
+
         # 限制返回数量
         return history[:limit]
     except sqlite3.Error as e:
@@ -959,23 +1014,23 @@ def get_fetch_history(limit: int = 10) -> List[Dict[str, Any]]:
 def get_video_tracking_stats(limit: int = 20) -> List[Dict[str, Any]]:
     """
     获取视频热门跟踪统计，修复重复视频问题
-    
+
     Args:
         limit: 限制返回的数量
-        
+
     Returns:
         List[Dict[str, Any]]: 视频热门统计信息（去重后）
     """
     connections = {}
     stats_dict = {}  # 使用字典存储结果，以bvid为键避免重复
-    
+
     try:
         # 获取所有年份的数据库连接
         connections = get_multi_year_connections()
-        
+
         for year, conn in connections.items():
             cursor = conn.cursor()
-            
+
             # 修改查询，使用DISTINCT消除重复，并确保只选择最新的记录
             cursor.execute('''
             WITH RankedVideos AS (
@@ -994,24 +1049,24 @@ def get_video_tracking_stats(limit: int = 20) -> List[Dict[str, Any]]:
             SELECT * FROM RankedVideos WHERE rn = 1
             LIMIT ?
             ''', (int(time.time()), limit))
-            
+
             rows = cursor.fetchall()
-            
+
             for row in rows:
                 bvid = row[1]  # 获取视频bvid
-                
+
                 # 如果该视频已经添加过（可能来自其他年份的数据库），则跳过
                 if bvid in stats_dict:
                     continue
-                    
+
                 first_seen_date = datetime.fromtimestamp(row[3]).strftime("%Y-%m-%d %H:%M:%S")
                 last_seen_date = datetime.fromtimestamp(row[4]).strftime("%Y-%m-%d %H:%M:%S")
-                
+
                 # 计算持续时间显示
                 total_seconds = row[6]
                 if row[5] == 1:  # 如果仍然活跃，加上当前时间差
                     total_seconds += (int(time.time()) - row[4])
-                
+
                 days = total_seconds // (24 * 3600)
                 hours = (total_seconds % (24 * 3600)) // 3600
                 minutes = (total_seconds % 3600) // 60
@@ -1021,7 +1076,7 @@ def get_video_tracking_stats(limit: int = 20) -> List[Dict[str, Any]]:
                 if hours > 0 or days > 0:
                     duration_str += f"{hours}小时"
                 duration_str += f"{minutes}分钟"
-                
+
                 stats_dict[bvid] = {
                     "aid": row[0],
                     "bvid": bvid,
@@ -1038,14 +1093,14 @@ def get_video_tracking_stats(limit: int = 20) -> List[Dict[str, Any]]:
                     "appearances": row[9],
                     "author": row[10]
                 }
-        
+
         # 将字典值转为列表并排序（按total_duration降序）
         stats = list(stats_dict.values())
         stats.sort(key=lambda x: x["total_duration"], reverse=True)
-        
+
         # 限制返回数量
         return stats[:limit]
-        
+
     except sqlite3.Error as e:
         print(f"查询视频跟踪统计时出错: {e}")
         return []
@@ -1057,12 +1112,12 @@ def get_video_tracking_stats(limit: int = 20) -> List[Dict[str, Any]]:
 def cleanup_inactive_video_records():
     """
     清理已经不在热门列表的视频数据，只保留首条和末条记录
-    
+
     此函数执行以下操作：
     1. 找出所有已经不在热门列表的视频（is_active=0）
     2. 对每个视频，保留其第一条和最后一条记录
     3. 删除该视频的所有中间记录
-    
+
     Returns:
         dict: 清理统计信息
     """
@@ -1073,90 +1128,90 @@ def cleanup_inactive_video_records():
         "error_count": 0,
         "year_stats": {}
     }
-    
+
     try:
         # 获取所有年份的数据库连接
         connections = get_multi_year_connections()
-        
+
         for year, conn in connections.items():
             year_stats = {
                 "processed_videos": 0,
                 "deleted_records": 0
             }
-            
+
             cursor = conn.cursor()
             cursor.execute("BEGIN TRANSACTION")
-            
+
             try:
                 # 1. 查找所有已经不在热门列表的视频
                 cursor.execute("""
-                    SELECT bvid 
-                    FROM popular_video_tracking 
+                    SELECT bvid
+                    FROM popular_video_tracking
                     WHERE is_active = 0
                 """)
-                
+
                 inactive_videos = [row[0] for row in cursor.fetchall()]
-                
+
                 print(f"{year}年数据库中找到 {len(inactive_videos)} 个不活跃视频")
-                
+
                 for bvid in inactive_videos:
                     # 2. 获取该视频的所有记录时间戳，按时间排序
                     cursor.execute("""
-                        SELECT fetch_time 
-                        FROM popular_videos 
-                        WHERE bvid = ? 
+                        SELECT fetch_time
+                        FROM popular_videos
+                        WHERE bvid = ?
                         ORDER BY fetch_time
                     """, (bvid,))
-                    
+
                     fetch_times = [row[0] for row in cursor.fetchall()]
-                    
+
                     if len(fetch_times) <= 2:
                         # 如果只有两条或更少记录，不需要清理
                         continue
-                    
+
                     # 3. 保留第一条和最后一条记录，删除中间记录
                     first_time = fetch_times[0]
                     last_time = fetch_times[-1]
-                    
+
                     # 构建要删除的时间列表（排除首尾）
                     times_to_delete = fetch_times[1:-1]
-                    
+
                     # 将时间列表转换为IN子句可用的格式
                     placeholders = ','.join(['?'] * len(times_to_delete))
-                    
+
                     # 4. 执行删除
                     cursor.execute(f"""
-                        DELETE FROM popular_videos 
+                        DELETE FROM popular_videos
                         WHERE bvid = ? AND fetch_time IN ({placeholders})
                     """, [bvid] + times_to_delete)
-                    
+
                     deleted_count = cursor.rowcount
-                    
+
                     # 6. 更新统计信息
                     year_stats["processed_videos"] += 1
                     year_stats["deleted_records"] += deleted_count
-                    
+
                     # 7. 输出清理信息
                     if deleted_count > 0:
                         print(f"清理视频 {bvid}: 删除了 {deleted_count} 条记录，保留首条({first_time})和末条({last_time})记录")
-                
+
                 # 提交事务
                 cursor.execute("COMMIT")
-                
+
                 # 更新总统计信息
                 stats["processed_videos"] += year_stats["processed_videos"]
                 stats["deleted_records"] += year_stats["deleted_records"]
                 stats["year_stats"][year] = year_stats
-                
+
             except Exception as e:
                 # 发生错误，回滚事务
                 cursor.execute("ROLLBACK")
                 print(f"{year}年数据清理时出错: {e}")
                 stats["error_count"] += 1
                 stats["year_stats"][year] = {"error": str(e)}
-        
+
         print(f"数据清理完成: 处理了 {stats['processed_videos']} 个视频，删除了 {stats['deleted_records']} 条记录")
-        
+
         # 执行VACUUM操作回收空间
         for year, conn in connections.items():
             try:
@@ -1165,9 +1220,9 @@ def cleanup_inactive_video_records():
                 print(f"{year}年数据库VACUUM操作完成")
             except Exception as e:
                 print(f"{year}年数据库VACUUM操作失败: {e}")
-        
+
         return stats
-        
+
     except Exception as e:
         print(f"执行数据清理时出错: {e}")
         stats["error"] = str(e)
@@ -1185,28 +1240,28 @@ def schedule_daily_cleanup():
     import threading
     import schedule
     import time
-    
+
     def run_cleanup():
         print(f"===== 开始执行每日数据清理，时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====")
         stats = cleanup_inactive_video_records()
         print(f"===== 每日数据清理完成，时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} =====")
         print(f"清理统计: {stats}")
-        
+
     def run_scheduler():
         # 设置每天凌晨3点执行清理
         schedule.every().day.at("03:00").do(run_cleanup)
-        
+
         while True:
             schedule.run_pending()
             time.sleep(60)  # 每分钟检查一次
-    
+
     # 创建并启动调度器线程
     scheduler_thread = threading.Thread(target=run_scheduler)
     scheduler_thread.daemon = True  # 设为守护线程，主程序退出时自动结束
     scheduler_thread.start()
-    
+
     print("已设置每日数据清理定时任务，将在每天凌晨3点执行")
-    
+
     # 也可以提供一个立即执行的选项
     return scheduler_thread
 

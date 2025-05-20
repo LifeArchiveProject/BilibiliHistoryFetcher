@@ -7,6 +7,110 @@ from typing import Dict, Any
 import yaml
 from loguru import logger
 
+# 全局变量，用于标记日志系统是否已初始化
+_logger_initialized = False
+
+def setup_logger(log_level: str = "INFO") -> Dict:
+    """
+    统一的日志系统初始化函数
+
+    Args:
+        log_level: 日志级别，默认为INFO
+
+    Returns:
+        包含日志路径信息的字典
+    """
+    global _logger_initialized
+
+    # 如果日志系统已初始化，直接返回
+    if _logger_initialized:
+        # 获取当前日志文件路径
+        current_date = datetime.now().strftime("%Y/%m/%d")
+        year_month = current_date.rsplit("/", 1)[0]  # 年/月 部分
+        day_only = current_date.split('/')[-1]  # 只取日期中的"日"部分
+        log_dir = f'output/logs/{year_month}/{day_only}'
+        main_log_file = f'{log_dir}/{day_only}.log'
+        error_log_file = f'{log_dir}/error_{day_only}.log'
+
+        return {
+            "log_dir": log_dir,
+            "main_log_file": main_log_file,
+            "error_log_file": error_log_file
+        }
+
+    # 创建日志目录
+    current_date = datetime.now().strftime("%Y/%m/%d")
+    year_month = current_date.rsplit("/", 1)[0]  # 年/月 部分
+    day_only = current_date.split('/')[-1]  # 只取日期中的"日"部分
+
+    # 日志文件夹路径(年/月/日)
+    log_dir = f'output/logs/{year_month}/{day_only}'
+    os.makedirs(log_dir, exist_ok=True)
+
+    # 日志文件路径
+    main_log_file = f'{log_dir}/{day_only}.log'
+    error_log_file = f'{log_dir}/error_{day_only}.log'
+
+    # 移除默认处理器
+    logger.remove()
+
+    # 配置全局上下文信息
+    logger.configure(extra={"app_name": "BilibiliHistoryFetcher", "version": "1.0.0"})
+
+    # 添加控制台处理器（仅INFO级别以上，只显示消息，无时间戳等）
+    logger.add(
+        sys.stdout,
+        level="INFO",
+        format="<green>{message}</green>",
+        filter=lambda record: (
+            # 只有以特定字符开头的信息才输出到控制台
+            isinstance(record["message"], str) and
+            record["message"].startswith(("===", "正在", "已", "成功", "错误:", "警告:"))
+        ),
+        enqueue=True,  # 确保控制台输出也是进程安全的
+        diagnose=False  # 禁用诊断以避免日志循环
+    )
+
+    # 添加文件处理器（完整日志信息）
+    logger.add(
+        main_log_file,
+        level=log_level,
+        format="[{time:YYYY-MM-DD HH:mm:ss}] [{level}] [{extra[app_name]}] [v{extra[version]}] [进程:{process}] [线程:{thread}] [{name}] [{file.name}:{line}] [{function}] {message}\n{exception}",
+        encoding="utf-8",
+        enqueue=True,  # 启用进程安全的队列
+        diagnose=False,  # 禁用诊断信息，避免不必要的栈跟踪导致的死锁
+        backtrace=False,  # 禁用异常回溯，避免不必要的栈跟踪
+        rotation="00:00",  # 每天午夜轮转
+        retention="30 days",  # 保留30天的日志
+        compression="zip"  # 压缩旧日志
+    )
+
+    # 专门用于记录错误级别日志的处理器
+    logger.add(
+        error_log_file,
+        level="ERROR",  # 只记录ERROR及以上级别
+        format="[{time:YYYY-MM-DD HH:mm:ss}] [{level}] [{extra[app_name]}] [{name}] [{file.name}:{line}] [{function}] {message}\n{exception}",
+        encoding="utf-8",
+        enqueue=True,
+        diagnose=False,  # 禁用诊断信息
+        backtrace=False,  # 禁用异常回溯
+        rotation="00:00",  # 每天午夜轮转
+        retention="30 days",
+        compression="zip"
+    )
+
+    # 标记日志系统已初始化
+    _logger_initialized = True
+
+    return {
+        "log_dir": log_dir,
+        "main_log_file": main_log_file,
+        "error_log_file": error_log_file
+    }
+
+# 初始化日志系统
+setup_logger()
+
 
 def get_base_path() -> str:
     """获取项目基础路径"""

@@ -7,20 +7,17 @@ import os
 import time
 import asyncio
 import signal
-import logging
 import traceback
 import platform
 from typing import Optional, List, Dict, Tuple, Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
+from loguru import logger
 
-from scripts.utils import load_config
+from scripts.utils import load_config, setup_logger
 
-# 设置日志格式
-logging.basicConfig(level=logging.INFO, force=True)
-# 避免日志循环，禁用传播
-logger = logging.getLogger(__name__)
-logger.propagate = False
+# 确保日志系统已初始化
+setup_logger()
 
 # 创建API路由
 router = APIRouter()
@@ -38,23 +35,28 @@ is_linux = platform.system().lower() == "linux"
 whisper_available = False
 
 try:
-    # 如果是Linux系统，先检查系统资源
-    if is_linux:
-        from scripts.system_resource_check import check_system_resources
-        resources = check_system_resources()
-        if resources["summary"]["can_run_speech_to_text"]:
+    # 使用scripts.system_resource_check中的系统资源检查函数，避免重复检查
+    from scripts.system_resource_check import check_system_resources
+    resources = check_system_resources()
+
+    # 根据系统资源检查结果决定是否导入WhisperModel
+    if resources["summary"]["can_run_speech_to_text"]:
+        try:
             from faster_whisper import WhisperModel
             whisper_available = True
-        else:
-            logger.warning(f"Linux系统资源不足，不导入WhisperModel模块。限制原因: {resources.get('summary', {}).get('resource_limitation', '未知')}")
+        except ImportError as e:
+            print(f"导入WhisperModel失败: {str(e)}")
+            whisper_available = False
     else:
-        # 非Linux系统，直接导入
-        from faster_whisper import WhisperModel
-        whisper_available = True
+        # 使用print而不是logger避免循环引用
+        print(f"系统资源不足，不导入WhisperModel模块。限制原因: {resources.get('summary', {}).get('resource_limitation', '未知')}")
+        whisper_available = False
 except ImportError as e:
-    logger.warning(f"导入WhisperModel失败: {str(e)}")
+    print(f"导入资源检查模块失败: {str(e)}")
+    whisper_available = False
 except Exception as e:
-    logger.error(f"导入模块时出错: {str(e)}")
+    print(f"检查系统资源时出错: {str(e)}")
+    whisper_available = False
 
 # 资源清理函数
 def handle_interrupt(signum, frame):
@@ -133,7 +135,7 @@ class ResourceCheckResponse(BaseModel):
 async def load_model(model_size, device=None, compute_type=None):
     """加载Whisper模型"""
     global whisper_model, model_loading
-    
+
     # 检查是否可以使用WhisperModel
     if not whisper_available:
         raise HTTPException(
@@ -144,13 +146,13 @@ async def load_model(model_size, device=None, compute_type=None):
                 "suggestion": "请检查系统资源或安装相关依赖"
             }
         )
-    
+
     try:
         # 检查是否已加载相同型号的模型
         if whisper_model is not None and whisper_model.model_size == model_size:
             logger.info(f"使用已加载的模型: {model_size}")
             return whisper_model
-            
+
         # 检查模型是否已下载
         is_downloaded, model_path = is_model_downloaded(model_size)
         if not is_downloaded:
@@ -163,7 +165,7 @@ async def load_model(model_size, device=None, compute_type=None):
                     "model_size": model_size
                 }
             )
-            
+
         # 如果其他进程正在加载模型，等待
         if model_loading:
             logger.info("其他进程正在加载模型，等待...")
@@ -178,26 +180,26 @@ async def load_model(model_size, device=None, compute_type=None):
                 await asyncio.sleep(1)
             if whisper_model is not None and whisper_model.model_size == model_size:
                 return whisper_model
-        
+
         model_loading = True
         start_time = time.time()
         logger.info(f"开始加载模型: {model_size}")
-        
+
         try:
             # 创建WhisperModel实例 - 使用同步方式加载模型，避免事件循环问题
             loop = asyncio.get_running_loop()
             whisper_model = await loop.run_in_executor(
-                None, 
+                None,
                 lambda: WhisperModel(model_size, device=device or "auto", compute_type=compute_type or "auto")
             )
-            
+
             load_time = time.time() - start_time
             logger.info(f"模型加载完成，耗时 {load_time:.2f} 秒")
-            
+
             # 存储模型大小信息
             whisper_model.model_size = model_size
             return whisper_model
-            
+
         except Exception as e:
             logger.error(f"模型加载失败: {str(e)}")
             logger.error(f"错误堆栈: {traceback.format_exc()}")
@@ -205,7 +207,7 @@ async def load_model(model_size, device=None, compute_type=None):
                 status_code=500,
                 detail=f"模型加载失败: {str(e)}"
             )
-            
+
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
@@ -224,7 +226,7 @@ def format_timestamp(seconds):
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     seconds_int = int(seconds % 60)
-    
+
     # 始终返回完整的 HH:MM:SS 格式
     return f"{hours:02d}:{minutes:02d}:{seconds_int:02d}"
 
@@ -232,7 +234,7 @@ def save_transcript(all_segments, output_path):
     """保存转录结果为简洁格式，适合节省token"""
     print(f"准备保存转录结果到: {output_path}")
     print(f"处理的片段数量: {len(all_segments)}")
-    
+
     # 整理数据：移除多余的空格和控制字符
     with open(output_path, "w", encoding="utf-8") as f:
         # 所有片段放在一行，用空格分隔
@@ -246,40 +248,40 @@ def save_transcript(all_segments, output_path):
             transcript_lines.append(f"{start_time}>{end_time}: {text}")
         # 将所有片段用空格连接并写入一行
         f.write(" ".join(transcript_lines))
-    
+
     print(f"转录结果已保存: {output_path}")
 
 async def transcribe_audio(audio_path, model_size="medium", language="zh", cid=None):
     """
     转录音频文件为文本
-    
+
     Args:
         audio_path: 音频文件路径
         model_size: 模型大小
         language: 语言代码
         cid: 视频CID
-        
+
     Returns:
         dict: 转录结果字典
     """
     start_time = time.time()
-    
+
     if not whisper_available:
         return {
             "success": False,
             "message": "语音转文字功能不可用，请安装faster-whisper",
             "cid": cid
         }
-    
+
     if not os.path.exists(audio_path):
         return {
-            "success": False, 
+            "success": False,
             "message": f"音频文件不存在: {audio_path}",
             "cid": cid
         }
-    
+
     print(f"开始处理音频文件: {audio_path}")
-    
+
     try:
         # 检测是否有GPU可用
         import subprocess
@@ -291,17 +293,17 @@ async def transcribe_audio(audio_path, model_size="medium", language="zh", cid=N
         except (FileNotFoundError, subprocess.SubprocessError):
             # 命令不存在或执行失败，认为没有GPU
             has_gpu = False
-            
+
         # 选择设备和计算类型
         device = "cuda" if has_gpu else "cpu"
         compute_type = "float16" if has_gpu else "int8"
-        
+
         print(f"使用设备: {device}, 计算类型: {compute_type}")
-        
+
         # 加载模型
         global whisper_model
         whisper_model = await load_model(model_size, device, compute_type)
-        
+
         # 转录音频
         segments, info = whisper_model.transcribe(
             audio_path,
@@ -309,27 +311,27 @@ async def transcribe_audio(audio_path, model_size="medium", language="zh", cid=N
             task="transcribe",
             beam_size=5
         )
-        
+
         # 处理结果
         logger.info("处理转录结果...")
         all_segments = list(segments)
         logger.info(f"转录得到 {len(all_segments)} 个片段")
-        
+
         # 如果指定了CID，保存到对应目录
         if cid:
             logger.info(f"准备保存结果到CID目录: {cid}")
             save_dir = os.path.join("output", "stt", str(cid))
             os.makedirs(save_dir, exist_ok=True)
-            
+
             # 保存JSON格式
             json_path = os.path.join(save_dir, f"{cid}.json")
             logger.info(f"保存JSON格式到: {json_path}")
             save_transcript(all_segments, json_path)
             logger.info("转录结果保存完成")
-        
+
         processing_time = time.time() - start_time
         logger.info(f"总处理时间: {processing_time:.2f} 秒")
-        
+
         return {
             "success": True,
             "message": "转录完成",
@@ -337,7 +339,7 @@ async def transcribe_audio(audio_path, model_size="medium", language="zh", cid=N
             "language_detected": info.language,
             "processing_time": processing_time
         }
-        
+
     except HTTPException as he:
         # 直接传递HTTP异常
         raise he
@@ -355,14 +357,14 @@ async def transcribe_audio_api(request: TranscribeRequest, background_tasks: Bac
     try:
         start_time = time.time()
         logger.info(f"收到转录请求: {request.audio_path}, 模型: {request.model_size}, 语言: {request.language}, CID: {request.cid}")
-        
+
         # 检查音频文件是否存在
         if not os.path.exists(request.audio_path):
             # 尝试使用CID查找音频文件
             audio_path = await find_audio_by_cid(request.cid)
             if not audio_path:
                 raise HTTPException(
-                    status_code=404, 
+                    status_code=404,
                     detail={
                         "error": "FILE_NOT_FOUND",
                         "message": f"未找到音频文件: {request.audio_path}，也未找到CID {request.cid} 对应的音频文件",
@@ -371,18 +373,18 @@ async def transcribe_audio_api(request: TranscribeRequest, background_tasks: Bac
                     }
                 )
             request.audio_path = audio_path
-        
+
         # 直接调用异步函数
         result = await transcribe_audio(
-            request.audio_path, 
-            model_size=request.model_size, 
-            language=request.language, 
+            request.audio_path,
+            model_size=request.model_size,
+            language=request.language,
             cid=request.cid
         )
-        
+
         processing_time = time.time() - start_time
         logger.info(f"转录完成，耗时: {processing_time:.2f} 秒")
-        
+
         return TranscribeResponse(
             success=result["success"],
             message=result["message"],
@@ -391,7 +393,7 @@ async def transcribe_audio_api(request: TranscribeRequest, background_tasks: Bac
             language_detected=result.get("language_detected"),
             cid=request.cid
         )
-        
+
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -406,7 +408,7 @@ async def transcribe_audio_api(request: TranscribeRequest, background_tasks: Bac
 async def list_models():
     """
     列出可用的Whisper模型，并显示每个模型的下载状态和详细信息
-    
+
     Returns:
         模型列表，包含名称、描述、下载状态等信息
     """
@@ -479,7 +481,7 @@ async def list_models():
             "recommended_use": "最新版本，提供最佳的识别效果和语言支持"
         }
     ]
-    
+
     result = []
     for model_info in model_infos:
         is_downloaded, model_path = is_model_downloaded(model_info["name"])
@@ -491,24 +493,24 @@ async def list_models():
             params_size=model_info["params_size"],
             recommended_use=model_info["recommended_use"]
         ))
-    
+
     return result
 
 @router.get("/find_audio", summary="根据CID查找音频文件路径")
 async def find_audio_by_cid(cid: int):
     """
     根据CID查找对应的音频文件路径
-    
+
     Args:
         cid: 视频的CID
-        
+
     Returns:
         音频文件的完整路径
     """
     try:
         # 构建基础下载目录路径
         base_dir = os.path.join("./output/download_video")
-        
+
         # 遍历所有文件夹，查找包含_cid的文件夹
         audio_path = None
         for root, dirs, files in os.walk(base_dir):
@@ -521,18 +523,18 @@ async def find_audio_by_cid(cid: int):
                         break
                 if audio_path:
                     break
-        
+
         if not audio_path:
             raise HTTPException(
                 status_code=404,
                 detail=f"未找到CID为{cid}的音频文件"
             )
-        
+
         return {
             "cid": cid,
             "audio_path": audio_path
         }
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -582,7 +584,7 @@ def get_model_info(model_size: str) -> ModelInfo:
     # faster-whisper模型路径
     model_path = os.path.expanduser(f"~/.cache/huggingface/hub/models--guillaumekln--faster-whisper-{model_size}")
     is_downloaded = os.path.exists(model_path)
-    
+
     # 模型大小信息（近似值）
     model_sizes = {
         "tiny": "75MB",
@@ -593,7 +595,7 @@ def get_model_info(model_size: str) -> ModelInfo:
         "large-v2": "3GB",
         "large-v3": "3GB"
     }
-    
+
     return ModelInfo(
         model_size=model_size,
         is_downloaded=is_downloaded,
@@ -609,17 +611,17 @@ async def check_environment():
     import sys
     import os
     import subprocess
-    
+
     os_name = platform.system()
     os_version = platform.version()
     python_version = sys.version
-    
+
     # 初始化变量
     cuda_available = False
     cuda_version = None
     gpu_info = None
     resource_limitation = None
-    
+
     try:
         # 检查CUDA是否可用
         cuda_available = False
@@ -629,13 +631,13 @@ async def check_environment():
             if result.returncode == 0:
                 # 成功执行nvidia-smi，表示CUDA可用
                 cuda_available = True
-                
+
                 # 尝试提取CUDA版本
                 import re
                 match = re.search(r"CUDA Version: (\d+\.\d+)", result.stdout)
                 if match:
                     cuda_version = match.group(1)
-                
+
                 # 提取GPU信息
                 gpu_info = []
                 lines = result.stdout.split('\n')
@@ -643,14 +645,14 @@ async def check_environment():
                     if "GeForce" in line or "RTX" in line or "GTX" in line or "Tesla" in line or "Quadro" in line:
                         name_match = re.search(r"(GeForce|RTX|GTX|Tesla|Quadro)[\w\s]+", line)
                         name = name_match.group(0) if name_match else "Unknown GPU"
-                        
+
                         # 尝试获取显存信息
                         mem_match = None
                         if i+1 < len(lines):
                             mem_match = re.search(r"(\d+)MiB\s+/\s+(\d+)MiB", lines[i+1])
-                        
+
                         memory = f"{int(mem_match.group(2))/1024:.1f}GB" if mem_match else "Unknown"
-                        
+
                         gpu_info.append({
                             "name": name.strip(),
                             "memory": memory
@@ -658,28 +660,29 @@ async def check_environment():
         except (FileNotFoundError, subprocess.SubprocessError):
             # nvidia-smi命令不可用，CUDA不可用
             cuda_available = False
-            
+
         # 获取CUDA安装指南
         cuda_setup_guide = get_cuda_setup_guide(os_name)
-        
-        # 如果是Linux系统且whisper不可用，获取资源限制原因
-        if is_linux and not whisper_available:
+
+        # 如果whisper不可用，获取资源限制原因
+        if not whisper_available:
             try:
+                # 使用scripts.system_resource_check中的系统资源检查函数，避免重复检查
                 from scripts.system_resource_check import check_system_resources
                 resources = check_system_resources()
                 resource_limitation = resources.get('summary', {}).get('resource_limitation', '系统资源不足')
             except Exception as e:
                 resource_limitation = f"资源检查失败: {str(e)}"
-    
+
         # 推荐设备选择
         recommended_device = "cuda" if cuda_available else "cpu"
         compute_type = "float16" if cuda_available else "int8"
-        
+
         # 获取模型信息
         models_info = {}
         for size in ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3"]:
             models_info[size] = get_model_info(size)
-        
+
         return EnvironmentCheckResponse(
             system_info=SystemInfo(
                 os_name=os_name,
@@ -707,7 +710,7 @@ async def check_environment():
 async def download_model(model_size: str):
     """
     下载指定的Whisper模型
-    
+
     Args:
         model_size: 模型大小，可选值: tiny, base, small, medium, large-v1, large-v2, large-v3
     """
@@ -720,22 +723,22 @@ async def download_model(model_size: str):
                 "message": f"模型 {model_size} 已下载",
                 "model_path": model_path
             }
-        
+
         # 创建临时的WhisperModel实例来触发下载
         # 注意：这里会阻塞直到下载完成
         logger.info(f"开始下载模型: {model_size}")
         start_time = time.time()
-        
+
         # 使用线程执行器来避免阻塞
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(
             None,
             lambda: WhisperModel(model_size, device="cpu", compute_type="int8")
         )
-        
+
         download_time = time.time() - start_time
         logger.info(f"模型下载完成，耗时: {download_time:.2f} 秒")
-        
+
         # 再次检查模型是否已下载
         is_downloaded, model_path = is_model_downloaded(model_size)
         if not is_downloaded:
@@ -743,37 +746,38 @@ async def download_model(model_size: str):
                 status_code=500,
                 detail="模型下载似乎完成但未找到模型文件"
             )
-            
+
         return {
             "status": "success",
             "message": f"模型 {model_size} 下载完成",
             "model_path": model_path,
             "download_time": f"{download_time:.2f}秒"
         }
-        
+
     except Exception as e:
         logger.error(f"模型下载失败: {str(e)}")
         logger.error(f"错误堆栈: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
             detail=f"模型下载失败: {str(e)}"
-        ) 
+        )
 
 @router.get("/resource_check", response_model=ResourceCheckResponse)
 async def check_system_resources_api():
     """
     检查系统资源是否满足运行语音转文字的要求
-    
+
     返回:
         ResourceCheckResponse: 包含系统资源检查结果的响应
     """
     try:
+        # 使用scripts.system_resource_check中的系统资源检查函数，避免重复检查
         from scripts.system_resource_check import check_system_resources
         resources = check_system_resources()
-        
+
         # 检查是否可以运行语音转文字
         can_run_speech_to_text = resources["summary"]["can_run_speech_to_text"] and whisper_available
-        
+
         # 获取限制原因
         limitation_reason = None
         if not can_run_speech_to_text:
@@ -781,14 +785,15 @@ async def check_system_resources_api():
                 limitation_reason = "缺少必要的依赖，请安装faster-whisper"
             else:
                 limitation_reason = resources.get("summary", {}).get("resource_limitation", "系统资源不足")
-        
+
         return ResourceCheckResponse(
-            **resources, 
+            **resources,
             can_run_speech_to_text=can_run_speech_to_text,
             limitation_reason=limitation_reason
         )
     except Exception as e:
-        logger.error(f"检查系统资源时出错: {e}")
+        # 使用print而不是logger避免循环引用
+        print(f"检查系统资源时出错: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"检查系统资源时出错: {str(e)}"
@@ -801,10 +806,10 @@ class DeleteModelRequest(BaseModel):
 async def delete_model(request: DeleteModelRequest):
     """
     删除指定的Whisper模型
-    
+
     Args:
         request: 包含要删除的模型大小
-        
+
     Returns:
         dict: 包含删除操作结果的信息
     """
@@ -819,7 +824,7 @@ async def delete_model(request: DeleteModelRequest):
                     "suggestion": "请检查系统资源或安装相关依赖"
                 }
             )
-        
+
         # 检查模型是否已下载
         is_downloaded, model_path = is_model_downloaded(request.model_size)
         if not is_downloaded:
@@ -828,7 +833,7 @@ async def delete_model(request: DeleteModelRequest):
                 "message": f"模型 {request.model_size} 未下载，无需删除",
                 "model_size": request.model_size
             }
-        
+
         # 如果模型正在使用中，不允许删除
         global whisper_model
         if whisper_model is not None and whisper_model.model_size == request.model_size:
@@ -837,7 +842,7 @@ async def delete_model(request: DeleteModelRequest):
                 "message": f"模型 {request.model_size} 当前正在使用中，无法删除。请先关闭使用该模型的任务后再尝试删除。",
                 "model_size": request.model_size
             }
-        
+
         # 删除模型文件
         import shutil
         try:
@@ -864,7 +869,7 @@ async def delete_model(request: DeleteModelRequest):
                 "model_size": request.model_size,
                 "model_path": model_path
             }
-            
+
     except Exception as e:
         logger.error(f"删除模型时出错: {str(e)}")
         traceback.print_exc()
@@ -877,10 +882,10 @@ async def delete_model(request: DeleteModelRequest):
 async def check_stt_file(cid: int):
     """
     检查指定CID的语音转文字文件是否存在
-    
+
     Args:
         cid: 视频的CID
-        
+
     Returns:
         dict: 包含文件是否存在的信息
     """
@@ -888,17 +893,17 @@ async def check_stt_file(cid: int):
         # 构建文件路径
         save_dir = os.path.join("output", "stt", str(cid))
         json_path = os.path.join(save_dir, f"{cid}.json")
-        
+
         # 检查文件是否存在
         exists = os.path.exists(json_path)
-        
+
         return {
             "success": True,
             "exists": exists,
             "cid": cid,
             "file_path": json_path if exists else None
         }
-        
+
     except Exception as e:
         logger.error(f"检查STT文件时出错: {str(e)}")
         raise HTTPException(
@@ -908,10 +913,10 @@ async def check_stt_file(cid: int):
 
 def is_model_downloaded(model_name: str) -> Tuple[bool, Optional[str]]:
     """检查模型是否已下载
-    
+
     Args:
         model_name: 模型名称
-        
+
     Returns:
         (是否已下载, 模型路径)
     """
@@ -920,15 +925,15 @@ def is_model_downloaded(model_name: str) -> Tuple[bool, Optional[str]]:
         cache_dir = os.path.join(os.environ.get('USERPROFILE', ''), '.cache', 'huggingface', 'hub')
     else:  # macOS / Linux
         cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
-        
+
     # 可能的模型提供者列表
     providers = ["guillaumekln", "Systran"]
-    
+
     # 检查每个可能的提供者路径
     for provider in providers:
         model_id = f"{provider}/faster-whisper-{model_name}"
         model_dir = os.path.join(cache_dir, 'models--' + model_id.replace('/', '--'))
         if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, 'snapshots')):
             return True, model_dir
-            
+
     return False, None

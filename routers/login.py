@@ -5,8 +5,11 @@ import qrcode
 import requests
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
-from scripts.utils import load_config, get_output_path
-import logging
+from loguru import logger
+from scripts.utils import load_config, get_output_path, setup_logger
+
+# 确保日志系统已初始化
+setup_logger()
 
 router = APIRouter()
 
@@ -19,26 +22,26 @@ def save_cookies(cookies):
     try:
         # 使用绝对路径
         config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yaml')
-        print(f"配置文件路径: {config_path}")
-        
+        logger.info(f"配置文件路径: {config_path}")
+
         if not os.path.exists(config_path):
-            print(f"配置文件不存在: {config_path}")
+            logger.error(f"配置文件不存在: {config_path}")
             raise HTTPException(
                 status_code=500,
                 detail="配置文件不存在"
             )
-        
+
         # 读取现有配置
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = f.read()
-            print("成功读取配置文件")
-        
+            logger.info("成功读取配置文件")
+
         # 要更新的Cookie字段列表
         cookie_fields = ['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ckMd5']
-        
+
         lines = config_data.split('\n')
         updated_fields = set()
-        
+
         # 更新已存在的字段
         for i, line in enumerate(lines):
             for field in cookie_fields:
@@ -48,19 +51,19 @@ def save_cookies(cookies):
                         updated_fields.add(field)
                         print(f"更新配置 {field}: {cookies[field]}")
                     break
-        
+
         # 添加不存在的字段
         for field in cookie_fields:
             if field in cookies and field not in updated_fields:
                 lines.append(f'{field}: {cookies[field]}')
                 print(f"添加配置 {field}: {cookies[field]}")
-        
+
         # 保存更新后的配置
         config_data = '\n'.join(lines)
         with open(config_path, 'w', encoding='utf-8') as f:
             f.write(config_data)
             print("配置文件已更新")
-            
+
     except Exception as e:
         print(f"保存cookies时发生错误: {str(e)}")
         raise HTTPException(
@@ -72,30 +75,30 @@ def save_cookies(cookies):
 async def generate_qrcode():
     """生成二维码登录的URL和密钥"""
     try:
-        print("开始生成二维码...")
-        
+        logger.info("开始生成二维码...")
+
         # 设置请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        
+
         # 调用B站API获取二维码URL
         response = requests.get(
             'https://passport.bilibili.com/x/passport-login/web/qrcode/generate',
             headers=headers,
             timeout=10  # 添加超时设置
         )
-        
-        print(f"API响应状态码: {response.status_code}")
-        print(f"API响应内容: {response.text}")
-        
+
+        logger.info(f"API响应状态码: {response.status_code}")
+        logger.debug(f"API响应内容: {response.text}")
+
         # 检查响应状态码
         if response.status_code != 200:
             raise HTTPException(
                 status_code=response.status_code,
                 detail=f"B站API请求失败: {response.text}"
             )
-        
+
         # 尝试解析JSON响应
         try:
             data = response.json()
@@ -106,35 +109,35 @@ async def generate_qrcode():
                 status_code=500,
                 detail=f"解析B站API响应失败: {str(e)}"
             )
-        
+
         if data.get('code') != 0:
             raise HTTPException(
                 status_code=400,
                 detail=f"B站API返回错误: {data.get('message', '未知错误')}"
             )
-        
+
         # 确保返回的数据包含必要的字段
         if 'data' not in data or 'url' not in data['data'] or 'qrcode_key' not in data['data']:
             raise HTTPException(
                 status_code=500,
                 detail="B站API返回的数据格式不正确"
             )
-        
+
         print("成功获取二维码URL和密钥")
-        
+
         # 生成二维码图片
         qr = qrcode.QRCode(version=1, box_size=10, border=5)
         qr.add_data(data['data']['url'])
         qr.make(fit=True)
-        
+
         # 保存二维码图片
         img = qr.make_image(fill_color="black", back_color="white")
         qr_path = get_output_path('temp/qrcode.png')
         os.makedirs(os.path.dirname(qr_path), exist_ok=True)
         img.save(qr_path)
-        
+
         print("二维码图片已生成")
-        
+
         return {
             "status": "success",
             "data": {
@@ -161,14 +164,14 @@ async def get_qrcode_image():
     try:
         print("尝试获取二维码图片...")
         qr_path = get_output_path('temp/qrcode.png')
-        
+
         if not os.path.exists(qr_path):
             print(f"二维码图片不存在: {qr_path}")
             raise HTTPException(
-                status_code=404, 
+                status_code=404,
                 detail="二维码图片不存在，请先调用 /login/qrcode/generate 接口生成二维码"
             )
-            
+
         print(f"成功找到二维码图片: {qr_path}")
         return FileResponse(
             qr_path,
@@ -189,18 +192,18 @@ async def poll_scan_status(qrcode_key: str):
     """轮询扫码状态"""
     try:
         print(f"开始轮询扫码状态，qrcode_key: {qrcode_key}")
-        
+
         if not qrcode_key:
             raise HTTPException(
                 status_code=400,
                 detail="缺少必要的qrcode_key参数"
             )
-        
+
         # 设置请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        
+
         # 调用B站API检查扫码状态
         try:
             response = requests.get(
@@ -209,19 +212,19 @@ async def poll_scan_status(qrcode_key: str):
                 headers=headers,
                 timeout=10
             )
-            
+
             print(f"API响应状态码: {response.status_code}")
             print(f"API响应内容: {response.text}")
             print(f"响应头: {response.headers}")
             print(f"响应Cookies: {response.cookies}")
-            
+
             # 检查响应状态码
             if response.status_code != 200:
                 raise HTTPException(
                     status_code=response.status_code,
                     detail=f"B站API请求失败: {response.text}"
                 )
-            
+
             # 尝试解析JSON响应
             try:
                 data = response.json()
@@ -232,7 +235,7 @@ async def poll_scan_status(qrcode_key: str):
                     status_code=500,
                     detail=f"解析B站API响应失败: {str(e)}"
                 )
-            
+
             # 检查API返回的code
             if data.get('code') != 0:
                 error_message = data.get('message', '未知错误')
@@ -245,29 +248,29 @@ async def poll_scan_status(qrcode_key: str):
                         "timestamp": int(time.time())
                     }
                 }
-            
+
             scan_data = data.get('data', {})
             print(f"扫码状态数据: {scan_data}")
-            
+
             # 如果登录成功，保存cookies
             if scan_data.get('code') == 0:
                 print("登录成功，保存cookies...")
-                
+
                 # 从set-cookie头和响应cookies中提取信息
                 cookies = {}
-                
+
                 # 从响应cookie中获取
                 for cookie in response.cookies:
                     cookies[cookie.name] = cookie.value
                     print(f"从响应cookies获取到: {cookie.name}={cookie.value}")
-                
+
                 # 从响应头中获取（有些Cookie可能在响应头的set-cookie中，但不在cookies中）
                 if 'set-cookie' in response.headers:
                     # 修复: 使用正确的方法获取set-cookie头
                     # CaseInsensitiveDict不支持getlist方法
                     set_cookie_header = response.headers.get('set-cookie', '')
                     print(f"从响应头获取到set-cookie: {set_cookie_header}")
-                    
+
                     # 如果是单个cookie
                     if set_cookie_header:
                         parts = set_cookie_header.split(';')[0].split('=', 1)
@@ -275,7 +278,7 @@ async def poll_scan_status(qrcode_key: str):
                             name, value = parts
                             cookies[name.strip()] = value.strip()
                             print(f"解析出cookie: {name.strip()}={value.strip()}")
-                    
+
                     # 可能多个cookie在不同的Set-Cookie头中
                     # 遍历所有响应头来查找所有的Set-Cookie
                     for key, value in response.headers.items():
@@ -285,7 +288,7 @@ async def poll_scan_status(qrcode_key: str):
                                 cookie_name, cookie_value = cookie_parts
                                 cookies[cookie_name.strip()] = cookie_value.strip()
                                 print(f"从头部遍历解析出cookie: {cookie_name.strip()}={cookie_value.strip()}")
-                
+
                 # 如果响应数据中包含cookie_info字段（TV端QR登录模式），从中提取cookies
                 if 'cookie_info' in scan_data:
                     cookie_info = scan_data.get('cookie_info', {})
@@ -293,7 +296,7 @@ async def poll_scan_status(qrcode_key: str):
                         if 'name' in cookie and 'value' in cookie:
                             cookies[cookie['name']] = cookie['value']
                             print(f"从cookie_info获取到: {cookie['name']}={cookie['value']}")
-                
+
                 # 如果必要的cookie不在响应中，从url中解析
                 if 'url' in scan_data and scan_data['url'] and ('SESSDATA' not in cookies or 'bili_jct' not in cookies):
                     url = scan_data['url']
@@ -306,21 +309,21 @@ async def poll_scan_status(qrcode_key: str):
                                 if name in ['DedeUserID', 'DedeUserID__ckMd5', 'SESSDATA', 'bili_jct']:
                                     cookies[name] = value
                                     print(f"从URL解析出cookie: {name}={value}")
-                
+
                 # 记录找到的所有cookie
                 print(f"找到的所有cookies: {cookies}")
-                
+
                 # 检查是否有必要的鉴权字段
                 if 'SESSDATA' not in cookies:
                     print("警告: 未获取到SESSDATA")
-                
+
                 if 'bili_jct' not in cookies:
                     print("警告: 未获取到bili_jct (CSRF Token)")
-                
+
                 # 保存cookies
                 save_cookies(cookies)
                 print("cookies已保存")
-                
+
                 # 记录获取到的鉴权信息
                 auth_info = {
                     "SESSDATA": cookies.get("SESSDATA", "未获取"),
@@ -329,7 +332,7 @@ async def poll_scan_status(qrcode_key: str):
                     "DedeUserID__ckMd5": cookies.get("DedeUserID__ckMd5", "未获取")
                 }
                 print(f"鉴权信息摘要: {auth_info}")
-            
+
             return {
                 "status": "success",
                 "data": {
@@ -338,14 +341,14 @@ async def poll_scan_status(qrcode_key: str):
                     "timestamp": int(time.time())
                 }
             }
-            
+
         except requests.RequestException as e:
             print(f"请求B站API时发生错误: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail=f"网络请求失败: {str(e)}"
             )
-            
+
     except Exception as e:
         print(f"发生未知错误: {str(e)}")
         if isinstance(e, HTTPException):
@@ -359,24 +362,24 @@ async def poll_scan_status(qrcode_key: str):
 async def logout():
     """退出登录，清空SESSDATA"""
     try:
-        print("开始退出登录...")
-        
+        logger.info("开始退出登录...")
+
         # 使用绝对路径
         config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config', 'config.yaml')
-        print(f"配置文件路径: {config_path}")
-        
+        logger.info(f"配置文件路径: {config_path}")
+
         if not os.path.exists(config_path):
-            print(f"配置文件不存在: {config_path}")
+            logger.error(f"配置文件不存在: {config_path}")
             raise HTTPException(
                 status_code=500,
                 detail="配置文件不存在"
             )
-        
+
         # 读取现有配置
         with open(config_path, 'r', encoding='utf-8') as f:
             config_data = f.read()
-            print("成功读取配置文件")
-        
+            logger.info("成功读取配置文件")
+
         # 清空SESSDATA
         lines = config_data.split('\n')
         new_lines = []
@@ -385,19 +388,19 @@ async def logout():
                 new_lines.append('SESSDATA: ""')
             else:
                 new_lines.append(line)
-        
+
         new_config = '\n'.join(new_lines)
-        
+
         # 保存更新后的配置
         with open(config_path, 'w', encoding='utf-8') as f:
             f.write(new_config)
             print("SESSDATA已清空")
-        
+
         return {
             "status": "success",
             "message": "已成功退出登录"
         }
-            
+
     except Exception as e:
         print(f"退出登录时发生错误: {str(e)}")
         raise HTTPException(
@@ -413,7 +416,7 @@ async def check_login_status():
 
         # 每次检查时重新加载配置
         current_config = get_current_config()
-        
+
         # 从配置文件中获取SESSDATA
         if not current_config.get('SESSDATA'):
             return JSONResponse(
@@ -425,31 +428,31 @@ async def check_login_status():
                     "data": None
                 }
             )
-        
+
         # 设置请求头
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Cookie': f'SESSDATA={current_config["SESSDATA"]}'
         }
-        
+
         # 调用B站API验证登录状态
         response = requests.get(
             'https://api.bilibili.com/x/web-interface/nav',
             headers=headers,
             timeout=10
         )
-        
+
         print(f"API响应状态码: {response.status_code}")
-        
+
         # 直接返回B站API的原始响应数据
         return JSONResponse(
             status_code=200,
             content=response.json()
         )
-        
+
     except Exception as e:
         print(f"检查登录状态时发生错误: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail=f"检查登录状态失败: {str(e)}"
-        ) 
+        )

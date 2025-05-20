@@ -51,75 +51,11 @@ from scripts.utils import load_config
 # 配置日志系统
 def setup_logging():
     """设置Loguru日志系统"""
-    # 创建日志目录
-    current_date = datetime.now().strftime("%Y/%m/%d")
-    year_month = current_date.rsplit("/", 1)[0]  # 年/月 部分
-    day_only = current_date.split('/')[-1]  # 只取日期中的"日"部分
+    # 使用统一的日志初始化函数
+    from scripts.utils import setup_logger
 
-    # 日志文件夹路径(年/月/日)
-    log_dir = f'output/logs/{year_month}/{day_only}'
-    os.makedirs(log_dir, exist_ok=True)
-
-    # 日志文件路径
-    main_log_file = f'{log_dir}/{day_only}.log'
-    error_log_file = f'{log_dir}/error_{day_only}.log'
-
-    # 移除默认处理器
-    logger.remove()
-
-    # 配置全局上下文信息
-    logger.configure(extra={"app_name": "BilibiliHistoryFetcher", "version": "1.0.0"})
-
-    # 添加控制台处理器（仅INFO级别以上，只显示消息，无时间戳等）
-    logger.add(
-        sys.stdout,
-        level="INFO",
-        format="<green>{message}</green>",
-        filter=lambda record: (
-            # 只有以特定字符开头的信息才输出到控制台
-            isinstance(record["message"], str) and
-            record["message"].startswith(("===", "正在", "已", "成功", "错误:", "警告:"))
-        ),
-        enqueue=True,  # 确保控制台输出也是进程安全的
-        diagnose=False  # 禁用诊断以避免日志循环
-    )
-
-    # 添加文件处理器（完整日志信息）
-    file_handler_id = logger.add(
-        main_log_file,
-        level="INFO",
-        format="[{time:YYYY-MM-DD HH:mm:ss}] [{level}] [{extra[app_name]}] [v{extra[version]}] [进程:{process}] [线程:{thread}] [{name}] [{file.name}:{line}] [{function}] {message}\n{exception}",
-        encoding="utf-8",
-        enqueue=True,  # 启用进程安全的队列
-        diagnose=False,  # 禁用诊断信息，避免不必要的栈跟踪导致的死锁
-        backtrace=False,  # 禁用异常回溯，避免不必要的栈跟踪
-        rotation="00:00",  # 每天午夜轮转
-        retention="30 days",  # 保留30天的日志
-        compression="zip"  # 压缩旧日志
-    )
-
-    # 专门用于记录错误级别日志的处理器
-    error_handler_id = logger.add(
-        error_log_file,
-        level="ERROR",  # 只记录ERROR及以上级别
-        format="[{time:YYYY-MM-DD HH:mm:ss}] [{level}] [{extra[app_name]}] [{name}] [{file.name}:{line}] [{function}] {message}\n{exception}",
-        encoding="utf-8",
-        enqueue=True,
-        diagnose=False,  # 禁用诊断信息
-        backtrace=False,  # 禁用异常回溯
-        rotation="00:00",  # 每天午夜轮转
-        retention="30 days",
-        compression="zip"
-    )
-
-    # 重定向系统异常到日志 - 使用简化版本
-    logger.add(
-        lambda msg: sys.__stderr__.write(f"{msg}\n"),
-        level="ERROR",
-        format="<red>系统错误: {message}</red>",
-        backtrace=False,
-        diagnose=False
-    )
+    # 初始化日志系统
+    log_info = setup_logger()
 
     # 重定向 print 输出到日志
     class PrintToLogger:
@@ -129,10 +65,23 @@ def setup_logging():
             self._is_shutting_down = False  # 标记系统是否正在关闭
             self._logging_in_progress = False  # 防止日志重入
             self._is_docker = os.environ.get('DOCKER_ENV') == 'true'  # 检测是否在Docker环境
+            self._resource_warning_pattern = "系统资源不足"  # 用于识别资源警告的模式
+            self._low_memory_detected = False  # 标记是否检测到内存不足
 
         def write(self, buf):
             # 如果系统正在关闭或在Docker环境中，直接写入原始stdout而不经过logger
             if self._is_shutting_down or self._is_docker:
+                self.stdout.write(buf)
+                return
+
+            # 检查是否包含资源警告信息
+            if self._resource_warning_pattern in buf:
+                # 如果已经检测到内存不足，跳过重复的警告
+                if self._low_memory_detected:
+                    return
+                # 标记已检测到内存不足
+                self._low_memory_detected = True
+                # 直接写入原始stdout，避免通过logger触发循环
                 self.stdout.write(buf)
                 return
 
@@ -189,6 +138,15 @@ def setup_logging():
             if self._line_buffer:
                 line = ''.join(self._line_buffer).rstrip()
                 if line:
+                    # 检查是否包含资源警告信息
+                    if self._resource_warning_pattern in line:
+                        if not self._low_memory_detected:
+                            self._low_memory_detected = True
+                            self.stdout.write(f"{line}\n")
+                        self._line_buffer = []
+                        self.stdout.flush()
+                        return
+
                     # 防止日志重入
                     if self._logging_in_progress:
                         self.stdout.write(f"{line}\n")
@@ -203,7 +161,7 @@ def setup_logging():
                             else:
                                 self.stdout.write(f"{line}\n")
                         except Exception:
-                                                            self.stdout.write(f"{line}\n")
+                            self.stdout.write(f"{line}\n")
                         finally:
                             self._logging_in_progress = False
                     self._line_buffer = []
@@ -230,40 +188,56 @@ def setup_logging():
         def __init__(self):
             super().__init__()
             self._is_docker = os.environ.get('DOCKER_ENV') == 'true'
+            self._in_emit = False  # 防止循环调用的标志
+            self._resource_warning_pattern = "系统资源不足"  # 用于识别资源警告的模式
 
         def emit(self, record):
+            # 防止循环调用
+            if self._in_emit:
+                # 如果已经在处理日志，直接返回
+                return
+
+            # 检查是否是资源警告消息，如果是则直接使用原始stdout输出
+            message = record.getMessage()
+            if self._resource_warning_pattern in message:
+                # 对于资源警告，直接使用原始stdout输出，避免循环
+                print(f"[{record.levelname}] {message}")
+                return
+
             # 在Docker环境中，简化处理以避免循环
             if self._is_docker:
                 # 使用原始的logging输出，不进行重定向
-                print(f"[{record.levelname}] {record.getMessage()}")
+                print(f"[{record.levelname}] {message}")
                 return
 
-            # 获取对应的Loguru级别名称
+            # 设置处理标志，防止循环
+            self._in_emit = True
+
             try:
-                level = logger.level(record.levelname).name
-            except ValueError:
-                level = record.levelno
+                # 获取对应的Loguru级别名称
+                try:
+                    level = logger.level(record.levelname).name
+                except ValueError:
+                    level = record.levelno
 
-            # 获取调用者的文件名和行号
-            frame, depth = sys._getframe(6), 6
-            while frame and frame.f_code.co_filename == logging.__file__:
-                frame = frame.f_back
-                depth += 1
+                # 获取调用者的文件名和行号
+                frame, depth = sys._getframe(6), 6
+                while frame and frame.f_code.co_filename == logging.__file__:
+                    frame = frame.f_back
+                    depth += 1
 
-            # 记录到日志文件，但不输出到控制台
-            logger.opt(depth=depth, exception=record.exc_info).log(
-                level, record.getMessage()
-            )
+                # 记录到日志文件，但不输出到控制台
+                logger.opt(depth=depth, exception=record.exc_info).log(
+                    level, message
+                )
+            finally:
+                # 重置处理标志
+                self._in_emit = False
 
     # 替换所有标准库的日志处理器
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
-    # 返回当前日志文件夹路径和文件信息
-    return {
-        "log_dir": log_dir,
-        "main_log_file": main_log_file,
-        "error_log_file": error_log_file
-    }
+    return log_info
 
 # 在应用启动时调用
 setup_logging()
@@ -426,7 +400,7 @@ app.add_middleware(
     allow_origins=["*"],  # 允许所有来源
     allow_credentials=True,
     allow_methods=["*"],  # 允许所有方法
-    allow_headers=["*", "X-API-Key"],  # 明确允许X-API-Key头部
+    allow_headers=["*"],  # 允许所有头部
 )
 
 # 注册路由
@@ -541,7 +515,7 @@ if __name__ == "__main__":
 
             uvicorn.run(
                 "main:app",
-                host=server_config.get('host', "127.0.0.1"),
+                host=server_config.get('host', "0.0.0.0"),  # 默认使用0.0.0.0允许所有IP访问
                 port=server_config.get('port', 8899),
                 log_level="debug",  # 修改为debug级别
                 reload=False,  # 禁用热重载以避免多个调度器实例
@@ -552,10 +526,10 @@ if __name__ == "__main__":
             logger.error(f"启动服务时出错: {e}")
             traceback.print_exc()
     else:
-        logger.info(f"使用HTTP启动服务，端口: {server_config.get('port', 8899)}")
+        logger.info(f"使用HTTP启动服务，主机: {server_config.get('host', '0.0.0.0')}，端口: {server_config.get('port', 8899)}")
         uvicorn.run(
             "main:app",
-            host=server_config.get('host', "127.0.0.1"),
+            host=server_config.get('host', "0.0.0.0"),  # 默认使用0.0.0.0允许所有IP访问
             port=server_config.get('port', 8899),
             log_level="info",
             reload=False  # 禁用热重载以避免多个调度器实例

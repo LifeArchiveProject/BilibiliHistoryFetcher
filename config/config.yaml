@@ -89,7 +89,7 @@ yutto:
 
 # 服务器配置
 server:
-  host: "localhost"
+  host: "0.0.0.0"  # 允许从任何IP访问
   port: 8899  # 设置你想要的端口号
   # HTTPS配置
   ssl_enabled: false
