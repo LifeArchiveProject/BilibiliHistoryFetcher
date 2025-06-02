@@ -20,29 +20,6 @@ def get_db():
     db_path = get_output_path(config['db_file'])
     return sqlite3.connect(db_path)
 
-def extract_keywords(titles: List[str], top_n: int = 20) -> List[Tuple[str, int]]:
-    """
-    从标题列表中提取关键词及其频率
-    """
-    # 停用词列表（可以根据需要扩展）
-    stop_words = {'的', '了', '是', '在', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这'}
-    
-    # 所有标题分词后的结果
-    all_words = []
-    for title in titles:
-        if not title:  # 跳过空标题
-            continue
-        words = jieba.cut(title)
-        # 过滤停用词和单字词（通常单字词不能很好地表达含义）
-        words = [w for w in words if w not in stop_words and len(w) > 1]
-        all_words.extend(words)
-    
-    # 统计词频
-    word_freq = Counter(all_words)
-    
-    # 返回前N个最常见的词
-    return word_freq.most_common(top_n)
-
 def analyze_keywords(titles_data: List[tuple]) -> List[Tuple[str, int]]:
     """
     从标题数据中提取关键词及其频率
@@ -88,11 +65,16 @@ def analyze_completion_rates(titles_data: List[tuple]) -> Dict:
     titles = []
     for title_data in titles_data:
         title = title_data[0]
-        duration = float(title_data[1]) if title_data[1] else 0
-        progress = float(title_data[2]) if title_data[2] else 0
-        
-        if duration and progress:  # 确保数据有效
-            completion_rate = min(progress / duration, 1.0)  # 限制最大值为1
+        duration = float(title_data[1]) if title_data[1] is not None else 0
+        progress = float(title_data[2]) if title_data[2] is not None else 0
+
+        if duration and duration > 0:  # 确保duration有效且大于0
+            if progress == -1.0:  # progress为-1表示看完了
+                completion_rate = 1.0
+            elif progress > 0:
+                completion_rate = min(progress / duration, 1.0)  # 限制最大值为1
+            else:
+                completion_rate = 0.0
             completion_rates.append(completion_rate)
             titles.append(title)
     
@@ -155,52 +137,6 @@ def generate_insights(keywords: List[Tuple[str, int]], completion_rates: Dict) -
             insights.append(f"而包含关键词 {', '.join([f'{k}({rate:.1%})' for k, rate, count in low_completion])} 的视频较少被看完。")
     
     return insights
-
-def analyze_title_completion_rate(conn: sqlite3.Connection) -> Dict:
-    """
-    分析标题特征与完成率的关系
-    """
-    cursor = conn.cursor()
-    
-    # 获取所有视频的标题、时长和观看进度
-    cursor.execute("""
-        SELECT title, duration, progress
-        FROM bilibili_history_2024
-        WHERE duration > 0 AND title IS NOT NULL
-    """)
-    
-    videos = cursor.fetchall()
-    
-    # 计算每个视频的完成率
-    completion_rates = []
-    titles = []
-    for title, duration, progress in videos:
-        if duration and progress:  # 确保数据有效
-            completion_rate = min(progress / duration, 1.0)  # 限制最大值为1
-            completion_rates.append(completion_rate)
-            titles.append(title)
-    
-    # 提取关键词
-    keywords = extract_keywords(titles, top_n=10)
-    
-    # 分析包含每个关键词的视频的平均完成率
-    keyword_completion_rates = {}
-    for keyword, _ in keywords:
-        rates = []
-        for title, rate in zip(titles, completion_rates):
-            if keyword in title:
-                rates.append(rate)
-        if rates:  # 如果有包含该关键词的视频
-            avg_rate = sum(rates) / len(rates)
-            keyword_completion_rates[keyword] = {
-                'average_completion_rate': avg_rate,
-                'video_count': len(rates)
-            }
-    
-    return {
-        'keyword_completion_rates': keyword_completion_rates,
-        'top_keywords': keywords
-    }
 
 def analyze_title_length(cursor, table_name: str) -> dict:
     """分析标题长度与观看行为的关系"""
@@ -409,114 +345,99 @@ def analyze_title_interaction(cursor, table_name: str) -> dict:
         ]
     }
 
-def get_available_years():
-    """获取数据库中所有可用的年份"""
-    conn = get_db()
-    try:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name LIKE 'bilibili_history_%'
-            ORDER BY name DESC
-        """)
-        
-        years = []
-        for (table_name,) in cursor.fetchall():
-            try:
-                year = int(table_name.split('_')[-1])
-                years.append(year)
-            except (ValueError, IndexError):
-                continue
-                
-        return sorted(years, reverse=True)
-    except sqlite3.Error as e:
-        print(f"获取年份列表时发生错误: {e}")
-        return []
-    finally:
-        if conn:
-            conn.close()
+def validate_year_and_get_table(year: Optional[int]) -> tuple:
+    """验证年份并返回表名和可用年份列表
 
-@router.get("/", summary="获取标题分析")
-async def get_title_analytics(
+    Args:
+        year: 要验证的年份，None表示使用最新年份
+
+    Returns:
+        tuple: (table_name, target_year, available_years) 或 (None, None, error_response)
+    """
+    # 导入已有的函数，避免重复代码
+    from .viewing_analytics import get_available_years
+
+    # 获取可用年份列表
+    available_years = get_available_years()
+    if not available_years:
+        error_response = {
+            "status": "error",
+            "message": "未找到任何历史记录数据"
+        }
+        return None, None, error_response
+
+    # 如果未指定年份，使用最新的年份
+    target_year = year if year is not None else available_years[0]
+
+    # 检查指定的年份是否可用
+    if year is not None and year not in available_years:
+        error_response = {
+            "status": "error",
+            "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
+        }
+        return None, None, error_response
+
+    table_name = f"bilibili_history_{target_year}"
+    return table_name, target_year, available_years
+
+@router.get("/keyword-analysis", summary="获取标题关键词分析")
+async def get_keyword_analysis(
     year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
     use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
 ):
-    """获取标题分析数据
-    
+    """获取标题关键词分析数据
+
     Args:
         year: 要分析的年份，不传则使用当前年份
         use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
-    
+
     Returns:
-        dict: 包含标题分析的各个维度的数据
+        dict: 包含关键词分析的数据
     """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
     try:
-        conn = get_db()
         cursor = conn.cursor()
-        
-        # 获取可用年份列表
-        available_years = get_available_years()
-        if not available_years:
-            return {
-                "status": "error",
-                "message": "未找到任何历史记录数据"
-            }
-        
-        # 如果未指定年份，使用最新的年份
-        target_year = year if year is not None else available_years[0]
-        
-        # 检查指定的年份是否可用
-        if year is not None and year not in available_years:
-            return {
-                "status": "error",
-                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
-            }
-        
-        table_name = f"bilibili_history_{target_year}"
-        
-        # 如果启用缓存，尝试从缓存获取完整响应
+
+        # 如果启用缓存，尝试从缓存获取
         if use_cache:
             from .title_pattern_discovery import pattern_cache
-            cached_response = pattern_cache.get_cached_patterns(table_name, 'full_response')
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'keyword_analysis')
             if cached_response:
-                print(f"从缓存获取 {target_year} 年的分析数据")
+                print(f"从缓存获取 {target_year} 年的关键词分析数据")
                 return cached_response
-        
-        print(f"开始分析 {target_year} 年的数据")
-        
-        # 获取所有标题，添加年份限制
+
+        print(f"开始分析 {target_year} 年的标题关键词数据")
+
+        # 获取所有标题数据
         cursor.execute(f"""
-            SELECT title, duration, progress, tag_name, view_at
+            SELECT title, duration, progress
             FROM {table_name}
             WHERE title IS NOT NULL AND title != ''
-            AND strftime('%Y', datetime(view_at, 'unixepoch')) = ?
-        """, (str(target_year),))
-        titles = cursor.fetchall()
-        
-        if not titles:
+        """)
+
+        titles_data = cursor.fetchall()
+
+        if not titles_data:
             return {
                 "status": "error",
                 "message": "未找到任何有效的标题数据"
             }
-        
+
         # 分词和关键词提取
-        keywords = analyze_keywords(titles)
-        
+        keywords = analyze_keywords(titles_data)
+
         # 分析完成率
-        completion_analysis = analyze_completion_rates(titles)
-        
+        completion_analysis = analyze_completion_rates(titles_data)
+
         # 生成洞察
         insights = generate_insights(keywords, completion_analysis)
-        
-        # 获取新增的分析结果
-        length_analysis = analyze_title_length(cursor, table_name)
-        sentiment_analysis = analyze_title_sentiment(cursor, table_name)
-        trend_analysis = analyze_title_trends(cursor, table_name)
-        
-        # 新增分析维度
-        interaction_analysis = analyze_title_interaction(cursor, table_name)
-        
-        # 构建完整响应
+
+        # 构建响应
         response = {
             "status": "success",
             "data": {
@@ -524,23 +445,255 @@ async def get_title_analytics(
                     "top_keywords": [{"word": word, "count": count} for word, count in keywords],
                     "completion_rates": completion_analysis
                 },
-                "length_analysis": length_analysis,
-                "sentiment_analysis": sentiment_analysis,
-                "trend_analysis": trend_analysis,
-                "interaction_analysis": interaction_analysis,
                 "insights": insights,
                 "year": target_year,
                 "available_years": available_years
             }
         }
-        
-        # 无论是否启用缓存，都更新缓存数据
+
+        # 更新缓存
         from .title_pattern_discovery import pattern_cache
-        print(f"更新 {target_year} 年的分析数据缓存")
-        pattern_cache.cache_patterns(table_name, 'full_response', response)
-        
+        print(f"更新 {target_year} 年的关键词分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'keyword_analysis', response)
+
         return response
-        
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/length-analysis", summary="获取标题长度分析")
+async def get_length_analysis(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取标题长度分析数据
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含标题长度分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'length_analysis')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的标题长度分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的标题长度数据")
+
+        # 获取标题长度分析
+        length_analysis = analyze_title_length(cursor, table_name)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "length_analysis": length_analysis,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的标题长度分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'length_analysis', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/sentiment-analysis", summary="获取标题情感分析")
+async def get_sentiment_analysis(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取标题情感分析数据
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含标题情感分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'sentiment_analysis')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的标题情感分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的标题情感数据")
+
+        # 获取标题情感分析
+        sentiment_analysis = analyze_title_sentiment(cursor, table_name)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "sentiment_analysis": sentiment_analysis,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的标题情感分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'sentiment_analysis', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/trend-analysis", summary="获取标题趋势分析")
+async def get_trend_analysis(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取标题趋势分析数据
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含标题趋势分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'trend_analysis')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的标题趋势分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的标题趋势数据")
+
+        # 获取标题趋势分析
+        trend_analysis = analyze_title_trends(cursor, table_name)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "trend_analysis": trend_analysis,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的标题趋势分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'trend_analysis', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/interaction-analysis", summary="获取标题互动分析")
+async def get_interaction_analysis(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取标题互动分析数据
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含标题互动分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'interaction_analysis')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的标题互动分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的标题互动数据")
+
+        # 获取标题互动分析
+        interaction_analysis = analyze_title_interaction(cursor, table_name)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "interaction_analysis": interaction_analysis,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的标题互动分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'interaction_analysis', response)
+
+        return response
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

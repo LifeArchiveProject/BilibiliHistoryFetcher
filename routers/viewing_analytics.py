@@ -1,5 +1,4 @@
 import sqlite3
-from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 
@@ -15,118 +14,6 @@ def get_db():
     db_path = get_output_path(config['db_file'])
     return sqlite3.connect(db_path)
 
-def get_current_year():
-    """获取当前年份"""
-    return datetime.now().year
-
-def sort_dict_by_value(d: dict, key: str = None, reverse: bool = True) -> dict:
-    """按值对字典进行排序，支持嵌套字典"""
-    if key:
-        return dict(sorted(d.items(), key=lambda x: x[1][key], reverse=reverse))
-    return dict(sorted(d.items(), key=lambda x: x[1], reverse=reverse))
-
-def get_top_n_items(d: dict, n: int, key: str = None) -> dict:
-    """获取排序后的前N个项目"""
-    sorted_dict = sort_dict_by_value(d, key, reverse=True)
-    return dict(list(sorted_dict.items())[:n])
-
-def generate_time_insights(data: dict) -> dict:
-    """根据时间分布数据生成人性化的见解和总结
-    
-    Args:
-        data: 包含各种时间统计数据的字典
-    
-    Returns:
-        dict: 包含各个维度的数据解读
-    """
-    insights = {}
-    
-    # 1. 活跃度解读
-    total_views = data['stats_summary']['total_views']
-    active_days = data['stats_summary']['active_days']
-    avg_daily = data['stats_summary']['average_daily_views']
-    
-    if active_days > 25:
-        activity_level = "非常活跃"
-    elif active_days > 15:
-        activity_level = "比较活跃"
-    else:
-        activity_level = "较为悠闲"
-    
-    insights['overall_activity'] = f"今年以来，你在B站观看了{total_views}个视频，总计活跃了{active_days}天，平均每天观看{avg_daily}个视频。整体来说，你是一位{activity_level}的B站用户。"
-    
-    # 2. 月度规律解读
-    monthly_stats = data['monthly_stats']
-    if monthly_stats:
-        max_month = max(monthly_stats.items(), key=lambda x: x[1])
-        min_month = min(monthly_stats.items(), key=lambda x: x[1])
-        month_trend = ""
-        
-        # 计算月度趋势
-        months = sorted(monthly_stats.keys())
-        if len(months) >= 2:
-            first_month_count = monthly_stats[months[0]]
-            last_month_count = monthly_stats[months[-1]]
-            if last_month_count > first_month_count * 1.2:
-                month_trend = "你在B站观看视频的热情正在逐月增长，看来你越来越喜欢B站了呢！"
-            elif last_month_count < first_month_count * 0.8:
-                month_trend = "最近你在B站的活跃度有所下降，可能是工作或学习变得更忙了吧。"
-            else:
-                month_trend = "你在B站的活跃度保持得很稳定，看来已经养成了良好的观看习惯。"
-        
-        insights['monthly_pattern'] = f"在{max_month[0]}月，你观看了{max_month[1]}个视频，是你最活跃的月份；而在{min_month[0]}月，观看量为{min_month[1]}个。{month_trend}"
-    
-    # 3. 周间分布解读
-    weekly_stats = data['weekly_stats']
-    if weekly_stats:
-        max_weekday = max(weekly_stats.items(), key=lambda x: x[1])
-        min_weekday = min(weekly_stats.items(), key=lambda x: x[1])
-        
-        # 计算工作日和周末的平均值
-        workday_avg = sum(weekly_stats[day] for day in ['周一', '周二', '周三', '周四', '周五']) / 5
-        weekend_avg = sum(weekly_stats[day] for day in ['周六', '周日']) / 2
-        
-        if weekend_avg > workday_avg * 1.5:
-            week_pattern = "你是一位周末党，倾向于在周末集中补番或观看视频。"
-        elif workday_avg > weekend_avg:
-            week_pattern = "工作日反而是你观看视频的主要时间，也许是通过B站来缓解工作压力？"
-        else:
-            week_pattern = "你的观看时间分布很均衡，不管是工作日还是周末都保持着适度的观看习惯。"
-        
-        insights['weekly_pattern'] = f"{week_pattern}其中{max_weekday[0]}是你最喜欢刷B站的日子，平均会看{round(max_weekday[1]/active_days*7, 1)}个视频；而{min_weekday[0]}的观看量最少。"
-    
-    # 4. 时段分布解读
-    peak_hours = data['peak_hours']
-    daily_slots = data['daily_time_slots']
-    
-    # 将一天分为几个时间段
-    morning = sum(daily_slots.get(f"{i}时", 0) for i in range(5, 12))
-    afternoon = sum(daily_slots.get(f"{i}时", 0) for i in range(12, 18))
-    evening = sum(daily_slots.get(f"{i}时", 0) for i in range(18, 23))
-    night = sum(daily_slots.get(f"{i}时", 0) for i in range(23, 24)) + sum(daily_slots.get(f"{i}时", 0) for i in range(0, 5))
-    
-    time_slots = [
-        ("清晨和上午", morning),
-        ("下午", afternoon),
-        ("傍晚和晚上", evening),
-        ("深夜", night)
-    ]
-    primary_slot = max(time_slots, key=lambda x: x[1])
-    
-    if primary_slot[0] == "深夜":
-        time_advice = "熬夜看视频可能会影响健康，建议调整作息哦！"
-    else:
-        time_advice = "这个时间段的观看习惯很好，既不影响作息，也能享受视频带来的乐趣。"
-    
-    insights['time_pattern'] = f"你最喜欢在{primary_slot[0]}观看B站视频，特别是{peak_hours[0]['hour']}达到观看高峰。{time_advice}"
-    
-    # 5. 特殊观看日解读
-    max_daily = data['max_daily_record']
-    if max_daily:
-        insights['peak_day'] = f"在{max_daily['date']}这一天，你创下了单日观看{max_daily['view_count']}个视频的记录！这可能是一个特别的日子，也许是在追番、学习或者在家放松的一天。"
-    
-    return insights
-
 def generate_continuity_insights(continuity_data: dict) -> dict:
     """生成连续性相关的洞察"""
     insights = {}
@@ -138,7 +25,7 @@ def generate_continuity_insights(continuity_data: dict) -> dict:
     # 根据连续天数生成评价
     streak_comment = ""
     if max_streak >= 30:
-        streak_comment = "你是B站的铁杆粉丝啊！"
+        streak_comment = "看来是B站的重度使用者"
     elif max_streak >= 14:
         streak_comment = "看来你对B站情有独钟呢！"
     else:
@@ -236,107 +123,6 @@ def analyze_time_investment(cursor, table_name: str) -> dict:
         },
         'avg_daily_duration': avg_daily_duration
     }
-
-def analyze_seasonal_patterns(cursor, table_name: str) -> dict:
-    """分析季节性观看模式
-    
-    Args:
-        cursor: 数据库游标
-        table_name: 表名
-    
-    Returns:
-        dict: 季节性分析结果
-    """
-    cursor.execute(f"""
-        SELECT 
-            CASE 
-                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (3,4,5) THEN '春季'
-                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (6,7,8) THEN '夏季'
-                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (9,10,11) THEN '秋季'
-                ELSE '冬季'
-            END as season,
-            COUNT(*) as view_count,
-            AVG(CASE WHEN progress = -1 THEN duration ELSE progress END) as avg_duration
-        FROM {table_name}
-        GROUP BY season
-    """)
-    
-    return {row[0]: {'view_count': row[1], 'avg_duration': row[2]} for row in cursor.fetchall()}
-
-def analyze_holiday_patterns(cursor, table_name: str) -> dict:
-    """分析假期和工作日的观看差异
-    
-    Args:
-        cursor: 数据库游标
-        table_name: 表名
-    
-    Returns:
-        dict: 假期与工作日对比分析结果
-    """
-    # 简单起见，这里只考虑周末作为假期
-    cursor.execute(f"""
-        SELECT 
-            CASE 
-                WHEN strftime('%w', datetime(view_at + 28800, 'unixepoch')) IN ('0', '6') THEN '周末'
-                ELSE '工作日'
-            END as day_type,
-            COUNT(*) as view_count,
-            AVG(CASE WHEN progress = -1 THEN duration ELSE progress END) as avg_duration,
-            COUNT(DISTINCT date(datetime(view_at + 28800, 'unixepoch'))) as active_days
-        FROM {table_name}
-        GROUP BY day_type
-    """)
-    
-    results = {row[0]: {
-        'view_count': row[1],
-        'avg_duration': row[2],
-        'active_days': row[3]
-    } for row in cursor.fetchall()}
-    
-    # 计算平均值
-    for day_type in results:
-        total_possible_days = 52 * (2 if day_type == '周末' else 5)  # 假设一年52周
-        results[day_type]['activity_rate'] = results[day_type]['active_days'] / total_possible_days
-    
-    return results
-
-def analyze_duration_time_correlation(cursor, table_name: str) -> dict:
-    """分析视频时长与观看时间段的关联
-    
-    Args:
-        cursor: 数据库游标
-        table_name: 表名
-    
-    Returns:
-        dict: 时长与时间段关联分析结果
-    """
-    cursor.execute(f"""
-        SELECT 
-            CASE 
-                WHEN CAST(strftime('%H', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) < 6 THEN '凌晨'
-                WHEN CAST(strftime('%H', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) < 12 THEN '上午'
-                WHEN CAST(strftime('%H', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) < 18 THEN '下午'
-                ELSE '晚上'
-            END as time_slot,
-            CASE 
-                WHEN duration < 300 THEN '短视频'
-                WHEN duration < 1200 THEN '中等视频'
-                ELSE '长视频'
-            END as duration_type,
-            COUNT(*) as video_count,
-            AVG(CASE WHEN progress = -1 THEN duration ELSE progress END) as avg_duration
-        FROM {table_name}
-        GROUP BY time_slot, duration_type
-    """)
-    
-    results = defaultdict(dict)
-    for row in cursor.fetchall():
-        results[row[0]][row[1]] = {
-            'video_count': row[2],
-            'avg_duration': row[3]
-        }
-    
-    return dict(results)
 
 def analyze_completion_rates(cursor, table_name: str) -> dict:
     """分析视频完成率"""
@@ -489,20 +275,9 @@ def analyze_completion_rates(cursor, table_name: str) -> dict:
             stats["average_completion_rate"] = round(stats["total_completion"] / stats["video_count"], 2)
             stats["fully_watched_rate"] = round(stats["fully_watched"] / stats["video_count"] * 100, 2)
             filtered_authors[name] = stats
-    
-    # 获取观看次数最多的UP主
-    most_watched_authors = dict(sorted(
-        filtered_authors.items(),
-        key=lambda x: x[1]["video_count"],
-        reverse=True
-    )[:10])
-    
-    # 获取完成率最高的UP主
-    highest_completion_authors = dict(sorted(
-        filtered_authors.items(),
-        key=lambda x: x[1]["average_completion_rate"],
-        reverse=True
-    )[:10])
+
+    most_watched_authors = {}
+    highest_completion_authors = {}
     
     # 计算分区平均完成率和完整观看率，并按观看数量筛选和排序
     filtered_tags = {}
@@ -511,13 +286,8 @@ def analyze_completion_rates(cursor, table_name: str) -> dict:
             stats["average_completion_rate"] = round(stats["total_completion"] / stats["video_count"], 2)
             stats["fully_watched_rate"] = round(stats["fully_watched"] / stats["video_count"] * 100, 2)
             filtered_tags[tag] = stats
-    
-    # 获取完成率最高的分区
-    top_tags = dict(sorted(
-        filtered_tags.items(),
-        key=lambda x: x[1]["average_completion_rate"],
-        reverse=True
-    )[:10])
+
+    top_tags = {}
     
     return {
         "overall_stats": overall_stats,
@@ -592,26 +362,6 @@ def generate_completion_insights(completion_data: dict) -> dict:
     
     return insights
 
-def generate_extended_insights(
-    continuity_data: dict,
-    completion_data: dict,
-    time_stats: dict
-) -> dict:
-    """生成扩展的数据洞察"""
-    insights = {}
-    
-    # 获取各个维度的洞察
-    time_insights = generate_time_insights(time_stats)
-    completion_insights = generate_completion_insights(completion_data)
-    continuity_insights = generate_continuity_insights(continuity_data)
-    
-    # 合并所有洞察
-    insights.update(time_insights)
-    insights.update(completion_insights)
-    insights.update(continuity_insights)
-    
-    return insights
-
 def analyze_video_watch_counts(cursor, table_name: str) -> dict:
     """分析视频观看次数"""
     # 获取表结构
@@ -672,10 +422,7 @@ def analyze_video_watch_counts(cursor, table_name: str) -> dict:
             duration_distribution["中等视频(5-20分钟)"] += 1
         else:
             duration_distribution["长视频(>20分钟)"] += 1
-        
-        # 统计重复观看的视频分区分布
-        if tag_name:
-            tag_distribution[tag_name] = tag_distribution.get(tag_name, 0) + 1
+
         
         # 记录观看次数最多的视频
         if len(most_watched_videos) < 10:
@@ -847,11 +594,11 @@ def get_available_years():
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT name FROM sqlite_master 
+            SELECT name FROM sqlite_master
             WHERE type='table' AND name LIKE 'bilibili_history_%'
             ORDER BY name DESC
         """)
-        
+
         years = []
         for (table_name,) in cursor.fetchall():
             try:
@@ -859,7 +606,7 @@ def get_available_years():
                 years.append(year)
             except (ValueError, IndexError):
                 continue
-                
+
         return sorted(years, reverse=True)
     except sqlite3.Error as e:
         print(f"获取年份列表时发生错误: {e}")
@@ -868,57 +615,74 @@ def get_available_years():
         if conn:
             conn.close()
 
-@router.get("/", summary="获取观看行为分析")
-async def get_viewing_analytics(
+def validate_year_and_get_table(year: Optional[int]) -> tuple:
+    """验证年份并返回表名和可用年份列表
+
+    Args:
+        year: 要验证的年份，None表示使用最新年份
+
+    Returns:
+        tuple: (table_name, target_year, available_years) 或 (None, None, error_response)
+    """
+    # 获取可用年份列表
+    available_years = get_available_years()
+    if not available_years:
+        error_response = {
+            "status": "error",
+            "message": "未找到任何历史记录数据"
+        }
+        return None, None, error_response
+
+    # 如果未指定年份，使用最新的年份
+    target_year = year if year is not None else available_years[0]
+
+    # 检查指定的年份是否可用
+    if year is not None and year not in available_years:
+        error_response = {
+            "status": "error",
+            "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
+        }
+        return None, None, error_response
+
+    table_name = f"bilibili_history_{target_year}"
+    return table_name, target_year, available_years
+
+@router.get("/monthly-stats", summary="获取月度观看统计分析")
+async def get_monthly_stats(
     year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
     use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
 ):
-    """获取用户观看时间分布分析
-    
+    """获取月度观看统计分析
+
     Args:
         year: 要分析的年份，不传则使用当前年份
         use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
-    
+
     Returns:
-        dict: 包含观看时间分布分析的各个维度的数据
+        dict: 包含月度观看统计分析的数据
     """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
     conn = get_db()
     try:
         cursor = conn.cursor()
-        
-        # 获取可用年份列表
-        available_years = get_available_years()
-        if not available_years:
-            return {
-                "status": "error",
-                "message": "未找到任何历史记录数据"
-            }
-        
-        # 如果未指定年份，使用最新的年份
-        target_year = year if year is not None else available_years[0]
-        
-        # 检查指定的年份是否可用
-        if year is not None and year not in available_years:
-            return {
-                "status": "error",
-                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
-            }
-        
-        table_name = f"bilibili_history_{target_year}"
-        
-        # 如果启用缓存，尝试从缓存获取完整响应
+
+        # 如果启用缓存，尝试从缓存获取
         if use_cache:
             from .title_pattern_discovery import pattern_cache
-            cached_response = pattern_cache.get_cached_patterns(table_name, 'viewing_analytics')
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'monthly_stats')
             if cached_response:
-                print(f"从缓存获取 {target_year} 年的观看时间分析数据")
+                print(f"从缓存获取 {target_year} 年的月度统计分析数据")
                 return cached_response
-        
-        print(f"开始分析 {target_year} 年的观看时间数据")
-        
-        # 1. 月度观看统计
+
+        print(f"开始分析 {target_year} 年的月度观看统计数据")
+
+        # 月度观看统计
         cursor.execute(f"""
-            SELECT 
+            SELECT
                 strftime('%Y-%m', datetime(view_at + 28800, 'unixepoch')) as month,
                 COUNT(*) as view_count
             FROM {table_name}
@@ -926,14 +690,120 @@ async def get_viewing_analytics(
             ORDER BY month
         """)
         monthly_stats = {row[0]: row[1] for row in cursor.fetchall()}
-        
-        # 2. 每周观看分布（0=周日，1-6=周一至周六）
-        weekday_mapping = {'0': '周日', '1': '周一', '2': '周二', '3': '周三', 
+
+        # 计算总视频数和活跃天数
+        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+        total_videos = cursor.fetchone()[0]
+
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT strftime('%Y-%m-%d', datetime(view_at + 28800, 'unixepoch')))
+            FROM {table_name}
+        """)
+        active_days = cursor.fetchone()[0]
+
+        # 计算平均每日观看数
+        avg_daily_videos = round(total_videos / active_days, 1) if active_days > 0 else 0
+
+        # 生成月度洞察
+        monthly_insights = {}
+
+        # 添加总体活动洞察
+        if total_videos > 0 and active_days > 0:
+            monthly_insights['overall_activity'] = f"今年以来，你在B站观看了{total_videos}个视频，平均每天观看{avg_daily_videos}个视频"
+
+        if monthly_stats:
+            max_month = max(monthly_stats.items(), key=lambda x: x[1])
+            min_month = min(monthly_stats.items(), key=lambda x: x[1])
+
+            # 计算月度趋势
+            months = sorted(monthly_stats.keys())
+            month_trend = ""
+            if len(months) >= 2:
+                first_month_count = monthly_stats[months[0]]
+                last_month_count = monthly_stats[months[-1]]
+                if last_month_count > first_month_count * 1.2:
+                    month_trend = "你在B站观看视频的热情正在逐月增长，看来你越来越喜欢B站了呢！"
+                elif last_month_count < first_month_count * 0.8:
+                    month_trend = "最近你在B站的活跃度有所下降，可能是工作或学习变得更忙了吧。"
+                else:
+                    month_trend = "你在B站的活跃度保持得很稳定，看来已经养成了良好的观看习惯。"
+
+            monthly_insights['monthly_pattern'] = f"在{max_month[0]}月，你观看了{max_month[1]}个视频，是你最活跃的月份；而在{min_month[0]}月，观看量为{min_month[1]}个。{month_trend}"
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "monthly_stats": monthly_stats,
+                "total_videos": total_videos,
+                "active_days": active_days,
+                "avg_daily_videos": avg_daily_videos,
+                "insights": monthly_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的月度统计分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'monthly_stats', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/weekly-stats", summary="获取周度观看统计分析")
+async def get_weekly_stats(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取周度观看统计分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含周度观看统计分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'weekly_stats')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的周度统计分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的周度观看统计数据")
+
+        # 计算活跃天数（用于洞察生成）
+        cursor.execute(f"""
+            SELECT COUNT(DISTINCT strftime('%Y-%m-%d', datetime(view_at + 28800, 'unixepoch'))) as active_days
+            FROM {table_name}
+        """)
+        active_days = cursor.fetchone()[0] or 0
+
+        # 每周观看分布（0=周日，1-6=周一至周六）
+        weekday_mapping = {'0': '周日', '1': '周一', '2': '周二', '3': '周三',
                           '4': '周四', '5': '周五', '6': '周六'}
         # 初始化所有星期的默认值为0
         weekly_stats = {day: 0 for day in weekday_mapping.values()}
         cursor.execute(f"""
-            SELECT 
+            SELECT
                 strftime('%w', datetime(view_at + 28800, 'unixepoch')) as weekday,
                 COUNT(*) as view_count
             FROM {table_name}
@@ -943,10 +813,104 @@ async def get_viewing_analytics(
         # 更新有数据的星期的值
         for row in cursor.fetchall():
             weekly_stats[weekday_mapping[row[0]]] = row[1]
-        
-        # 3. 每日时段分布（按小时统计）
+
+        # 季节性观看模式分析
         cursor.execute(f"""
-            SELECT 
+            SELECT
+                CASE
+                    WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (1,2,3) THEN '春季'
+                    WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (4,5,6) THEN '夏季'
+                    WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (7,8,9) THEN '秋季'
+                    WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (10,11,12) THEN '冬季'
+                END as season,
+                COUNT(*) as view_count,
+                AVG(CASE WHEN progress = -1 THEN duration ELSE progress END) as avg_duration
+            FROM {table_name}
+            WHERE CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) BETWEEN 1 AND 12
+            GROUP BY season
+        """)
+        seasonal_patterns = {row[0]: {'view_count': row[1], 'avg_duration': row[2]} for row in cursor.fetchall()}
+
+        # 生成周度统计洞察
+        weekly_insights = {}
+        if weekly_stats and active_days > 0:
+            max_weekday = max(weekly_stats.items(), key=lambda x: x[1])
+            min_weekday = min(weekly_stats.items(), key=lambda x: x[1])
+
+            # 计算工作日和周末的平均值
+            workday_avg = sum(weekly_stats[day] for day in ['周一', '周二', '周三', '周四', '周五']) / 5
+            weekend_avg = sum(weekly_stats[day] for day in ['周六', '周日']) / 2
+
+            if weekend_avg > workday_avg * 1.5:
+                week_pattern = "你是一位周末党，倾向于在周末集中补番或观看视频。"
+            elif workday_avg > weekend_avg:
+                week_pattern = "工作日反而是你观看视频的主要时间，也许是通过B站来缓解工作压力？"
+            else:
+                week_pattern = "你的观看时间分布很均衡，不管是工作日还是周末都保持着适度的观看习惯。"
+
+            weekly_insights['weekly_pattern'] = f"{week_pattern}其中{max_weekday[0]}是你最喜欢刷B站的日子，平均会看{round(max_weekday[1]/active_days*7, 1)}个视频；而{min_weekday[0]}的观看量最少。"
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "weekly_stats": weekly_stats,
+                "seasonal_patterns": seasonal_patterns,
+                "insights": weekly_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的周度统计分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'weekly_stats', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/time-slots", summary="获取时段观看分析")
+async def get_time_slots(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取时段观看分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含时段观看分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'time_slots')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的时段分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的时段观看数据")
+
+        # 每日时段分布（按小时统计）
+        cursor.execute(f"""
+            SELECT
                 strftime('%H', datetime(view_at + 28800, 'unixepoch')) as hour,
                 COUNT(*) as view_count
             FROM {table_name}
@@ -954,10 +918,10 @@ async def get_viewing_analytics(
             ORDER BY hour
         """)
         daily_time_slots = {f"{int(row[0])}时": row[1] for row in cursor.fetchall()}
-        
-        # 4. 最活跃时段TOP5
+
+        # 最活跃时段TOP5
         cursor.execute(f"""
-            SELECT 
+            SELECT
                 strftime('%H', datetime(view_at + 28800, 'unixepoch')) as hour,
                 COUNT(*) as view_count
             FROM {table_name}
@@ -969,104 +933,141 @@ async def get_viewing_analytics(
             "hour": f"{int(row[0])}时",
             "view_count": row[1]
         } for row in cursor.fetchall()]
-        
-        # 5. 最高单日观看记录
+
+        # 时间投入分析 - 使用已有的函数
+        time_investment = analyze_time_investment(cursor, table_name)
+
+        # 单日最大观看记录
         cursor.execute(f"""
-            SELECT 
-                strftime('%Y-%m-%d', datetime(view_at + 28800, 'unixepoch')) as date,
-                COUNT(*) as view_count
+            SELECT
+                date(datetime(view_at + 28800, 'unixepoch')) as view_date,
+                COUNT(*) as video_count
             FROM {table_name}
-            GROUP BY date
-            ORDER BY view_count DESC
+            GROUP BY view_date
+            ORDER BY video_count DESC
             LIMIT 1
         """)
-        max_daily = cursor.fetchone()
+        max_daily_record = cursor.fetchone()
         max_daily_record = {
-            "date": max_daily[0],
-            "view_count": max_daily[1]
-        } if max_daily else None
-        
-        # 6. 计算一些统计指标
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        total_views = cursor.fetchone()[0]
-        
-        cursor.execute(f"""
-            SELECT COUNT(DISTINCT strftime('%Y-%m-%d', datetime(view_at + 28800, 'unixepoch')))
-            FROM {table_name}
-        """)
-        active_days = cursor.fetchone()[0]
-        
-        stats_summary = {
-            "total_views": total_views,
-            "active_days": active_days,
-            "average_daily_views": round(total_views / active_days, 2) if active_days > 0 else 0
+            'date': max_daily_record[0],
+            'video_count': max_daily_record[1]
         }
-        
-        # 获取扩展分析数据
-        continuity_data = analyze_viewing_continuity(cursor, table_name)
-        time_investment_data = analyze_time_investment(cursor, table_name)
-        seasonal_data = analyze_seasonal_patterns(cursor, table_name)
-        holiday_data = analyze_holiday_patterns(cursor, table_name)
-        duration_correlation_data = analyze_duration_time_correlation(cursor, table_name)
-        completion_data = analyze_completion_rates(cursor, table_name)
-        watch_count_data = analyze_video_watch_counts(cursor, table_name)
-        
-        # 生成基础洞察
-        insights = generate_time_insights({
-            "monthly_stats": monthly_stats,
-            "weekly_stats": weekly_stats,
-            "daily_time_slots": daily_time_slots,
-            "peak_hours": peak_hours,
-            "max_daily_record": max_daily_record,
-            "stats_summary": stats_summary
-        })
-        
-        # 生成扩展洞察
-        extended_insights = generate_extended_insights(
-            continuity_data,
-            completion_data,
-            {
-                "monthly_stats": monthly_stats,
-                "weekly_stats": weekly_stats,
-                "daily_time_slots": daily_time_slots,
-                "peak_hours": peak_hours,
-                "max_daily_record": max_daily_record,
-                "stats_summary": stats_summary
-            }
-        )
-        
-        # 生成重复观看洞察
-        watch_count_insights = generate_watch_count_insights(watch_count_data)
-        
-        # 构建完整响应
+
+        # 生成时段分析洞察
+        time_slot_insights = {}
+        if daily_time_slots and peak_hours:
+            # 将一天分为几个时间段
+            morning = sum(daily_time_slots.get(f"{i}时", 0) for i in range(5, 12))
+            afternoon = sum(daily_time_slots.get(f"{i}时", 0) for i in range(12, 18))
+            evening = sum(daily_time_slots.get(f"{i}时", 0) for i in range(18, 23))
+            night = sum(daily_time_slots.get(f"{i}时", 0) for i in range(23, 24)) + sum(daily_time_slots.get(f"{i}时", 0) for i in range(0, 5))
+
+            time_slots = [
+                ("清晨和上午", morning),
+                ("下午", afternoon),
+                ("傍晚和晚上", evening),
+                ("深夜", night)
+            ]
+            primary_slot = max(time_slots, key=lambda x: x[1])
+
+            if primary_slot[0] == "深夜":
+                time_advice = "熬夜看视频可能会影响健康，建议调整作息哦！"
+            else:
+                time_advice = "这个时间段的观看习惯很好，既不影响作息，也能享受视频带来的乐趣。"
+
+            # 获取最高峰时段
+            top_hour = peak_hours[0]["hour"] if peak_hours else "未知"
+
+            time_slot_insights['time_preference'] = f"你最喜欢在{primary_slot[0]}观看B站视频，特别是{top_hour}达到观看高峰。{time_advice}"
+
+        # 生成单日观看记录洞察
+        if max_daily_record:
+            time_slot_insights['daily_record'] = f"在{max_daily_record['date']}这一天，你创下了单日观看{max_daily_record['video_count']}个视频的记录！这可能是一个特别的日子，也许是在追番、学习或者在家放松的一天。"
+
+        # 构建响应
         response = {
             "status": "success",
             "data": {
-                'monthly_stats': monthly_stats,
-                'weekly_stats': weekly_stats,
-                'daily_time_slots': daily_time_slots,
-                'peak_hours': peak_hours,
-                'max_daily_record': max_daily_record,
-                'viewing_continuity': continuity_data,
-                'time_investment': time_investment_data,
-                'seasonal_patterns': seasonal_data,
-                'holiday_patterns': holiday_data,
-                'duration_correlation': duration_correlation_data,
-                'completion_rates': completion_data,
-                'watch_counts': watch_count_data,
-                'insights': {**insights, **extended_insights, **watch_count_insights},
-                'year': target_year,
-                'available_years': available_years
+                "daily_time_slots": daily_time_slots,
+                "peak_hours": peak_hours,
+                "time_investment": time_investment,
+                "max_daily_record": max_daily_record,
+                "insights": time_slot_insights,
+                "year": target_year,
+                "available_years": available_years
             }
         }
-        
-        # 无论是否启用缓存，都更新缓存数据
+
+        # 更新缓存
         from .title_pattern_discovery import pattern_cache
-        print(f"更新 {target_year} 年的观看时间分析数据缓存")
-        pattern_cache.cache_patterns(table_name, 'viewing_analytics', response)
-        
+        print(f"更新 {target_year} 年的时段分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'time_slots', response)
+
         return response
-        
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/continuity", summary="获取观看连续性分析")
+async def get_viewing_continuity(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取观看连续性分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含观看连续性分析的数据
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'viewing_continuity')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的观看连续性分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的观看连续性数据")
+
+        # 分析观看连续性
+        viewing_continuity = analyze_viewing_continuity(cursor, table_name)
+
+        # 生成连续性洞察
+        continuity_insights = generate_continuity_insights(viewing_continuity)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "viewing_continuity": viewing_continuity,
+                "insights": continuity_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的观看连续性分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'viewing_continuity', response)
+
+        return response
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -1321,29 +1322,14 @@ async def get_viewing_details(
     Returns:
         dict: 包含观看行为分析的详细数据和总结报告
     """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
     conn = get_db()
     try:
         cursor = conn.cursor()
-        
-        # 获取可用年份列表
-        available_years = get_available_years()
-        if not available_years:
-            return {
-                "status": "error",
-                "message": "未找到任何历史记录数据"
-            }
-        
-        # 如果未指定年份，使用最新的年份
-        target_year = year if year is not None else available_years[0]
-        
-        # 检查指定的年份是否可用
-        if year is not None and year not in available_years:
-            return {
-                "status": "error",
-                "message": f"未找到 {year} 年的历史记录数据。可用的年份有：{', '.join(map(str, available_years))}"
-            }
-        
-        table_name = f"bilibili_history_{target_year}"
         
         # 如果启用缓存，尝试从缓存获取完整响应
         if use_cache:
@@ -1378,6 +1364,685 @@ async def get_viewing_details(
         pattern_cache.cache_patterns(table_name, 'viewing_details', response)
         
         return response
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/watch-counts", summary="获取重复观看分析")
+async def get_viewing_watch_counts(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取用户重复观看分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含重复观看分析结果的响应
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'watch_counts')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的重复观看分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的重复观看数据")
+
+        # 获取重复观看分析数据
+        watch_count_data = analyze_video_watch_counts(cursor, table_name)
+
+        # 生成重复观看洞察
+        watch_count_insights = generate_watch_count_insights(watch_count_data)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "watch_counts": watch_count_data,
+                "insights": watch_count_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的重复观看分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'watch_counts', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+@router.get("/completion-rates", summary="获取视频完成率分析")
+async def get_viewing_completion_rates(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取用户视频完成率分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含视频完成率分析结果的响应
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'completion_rates')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的视频完成率分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的视频完成率数据")
+
+        # 获取视频完成率分析数据
+        completion_data = analyze_completion_rates(cursor, table_name)
+
+        # 生成完成率洞察
+        completion_insights = generate_completion_insights(completion_data)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "completion_rates": completion_data,
+                "insights": completion_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的视频完成率分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'completion_rates', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+def analyze_author_completion_rates(cursor, table_name: str) -> dict:
+    """专门分析UP主完成率数据"""
+    # 获取表结构
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = {col[1]: idx for idx, col in enumerate(cursor.fetchall())}
+
+    # 确保必要的列存在
+    required_columns = ['duration', 'progress', 'author_name', 'author_mid']
+    for col in required_columns:
+        if col not in columns:
+            raise ValueError(f"Required column '{col}' not found in table {table_name}")
+
+    # 获取所有历史记录
+    cursor.execute(f"SELECT * FROM {table_name}")
+    histories = cursor.fetchall()
+
+    author_stats = {}
+
+    for history in histories:
+        # 获取并转换数据类型
+        try:
+            duration = float(history[columns['duration']]) if history[columns['duration']] else 0
+            progress = float(history[columns['progress']]) if history[columns['progress']] else 0
+            author_name = history[columns['author_name']]
+            author_mid = history[columns['author_mid']]
+        except (ValueError, TypeError):
+            continue
+
+        # 计算完成率
+        if progress == -1:
+            completion_rate = 100
+        else:
+            completion_rate = (progress / duration * 100) if duration > 0 else 0
+
+        # UP主统计
+        if author_name and author_mid:
+            if author_name not in author_stats:
+                author_stats[author_name] = {
+                    "author_mid": author_mid,
+                    "video_count": 0,
+                    "total_completion": 0,
+                    "fully_watched": 0
+                }
+            stats = author_stats[author_name]
+            stats["video_count"] += 1
+            stats["total_completion"] += completion_rate
+            if completion_rate >= 90:
+                stats["fully_watched"] += 1
+
+    # 计算UP主平均完成率和完整观看率，并按观看数量筛选
+    filtered_authors = {}
+    for name, stats in author_stats.items():
+        if stats["video_count"] >= 5:  # 只保留观看数量>=5的UP主
+            stats["average_completion_rate"] = round(stats["total_completion"] / stats["video_count"], 2)
+            stats["fully_watched_rate"] = round(stats["fully_watched"] / stats["video_count"] * 100, 2)
+            filtered_authors[name] = stats
+
+    # 获取观看次数最多的UP主
+    most_watched_authors = dict(sorted(
+        filtered_authors.items(),
+        key=lambda x: x[1]["video_count"],
+        reverse=True
+    )[:10])
+
+    # 获取完成率最高的UP主
+    highest_completion_authors = dict(sorted(
+        filtered_authors.items(),
+        key=lambda x: x[1]["average_completion_rate"],
+        reverse=True
+    )[:10])
+
+    return {
+        "most_watched_authors": most_watched_authors,
+        "highest_completion_authors": highest_completion_authors
+    }
+
+def generate_author_completion_insights(author_data: dict) -> dict:
+    """生成UP主完成率相关的洞察"""
+    insights = {}
+
+    try:
+        # UP主偏好洞察
+        most_watched = author_data.get("most_watched_authors", {})
+        if most_watched:
+            top_watched = next(iter(most_watched.items()), None)
+            if top_watched:
+                insights["most_watched_author"] = (
+                    f"你观看最多的UP主是{top_watched[0]}，观看了{top_watched[1].get('video_count', 0)}个视频，"
+                    f"平均完成率为{top_watched[1].get('average_completion_rate', 0)}%。"
+                )
+
+        highest_completion = author_data.get("highest_completion_authors", {})
+        if highest_completion and most_watched:
+            top_completion = next(iter(highest_completion.items()), None)
+            if top_completion and top_completion[0] != next(iter(most_watched.keys())):
+                insights["highest_completion_author"] = (
+                    f"在经常观看的UP主中，你对{top_completion[0]}的视频完成度最高，"
+                    f"平均完成率达到{top_completion[1].get('average_completion_rate', 0)}%，"
+                    f"观看过{top_completion[1].get('video_count', 0)}个视频。"
+                )
+
+    except Exception as e:
+        print(f"Error generating author completion insights: {str(e)}")
+        insights["basic_author"] = "暂时无法生成详细的UP主完成率分析。"
+
+    return insights
+
+@router.get("/author-completion", summary="获取UP主完成率分析")
+async def get_viewing_author_completion(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取UP主完成率分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含UP主完成率分析结果的响应
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'author_completion')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的UP主完成率分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的UP主完成率数据")
+
+        # 获取UP主完成率分析数据
+        author_data = analyze_author_completion_rates(cursor, table_name)
+
+        # 生成UP主完成率洞察
+        author_insights = generate_author_completion_insights(author_data)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "completion_rates": author_data,
+                "insights": author_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的UP主完成率分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'author_completion', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+def analyze_tag_analysis(cursor, table_name: str) -> dict:
+    """专门分析标签数据，包括分布和完成率"""
+    # 获取表结构
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = {col[1]: idx for idx, col in enumerate(cursor.fetchall())}
+
+    # 确保必要的列存在
+    required_columns = ['duration', 'progress', 'tag_name']
+    for col in required_columns:
+        if col not in columns:
+            raise ValueError(f"Required column '{col}' not found in table {table_name}")
+
+    # 获取所有历史记录
+    cursor.execute(f"SELECT * FROM {table_name}")
+    histories = cursor.fetchall()
+
+    tag_stats = {}
+    tag_distribution = {}
+
+    for history in histories:
+        # 获取并转换数据类型
+        try:
+            duration = float(history[columns['duration']]) if history[columns['duration']] else 0
+            progress = float(history[columns['progress']]) if history[columns['progress']] else 0
+            tag_name = history[columns['tag_name']]
+        except (ValueError, TypeError):
+            continue
+
+        # 计算完成率
+        if progress == -1:
+            completion_rate = 100
+        else:
+            completion_rate = (progress / duration * 100) if duration > 0 else 0
+
+        # 标签分布统计
+        if tag_name:
+            tag_distribution[tag_name] = tag_distribution.get(tag_name, 0) + 1
+
+            # 标签完成率统计
+            if tag_name not in tag_stats:
+                tag_stats[tag_name] = {
+                    "video_count": 0,
+                    "total_completion": 0,
+                    "fully_watched": 0
+                }
+            stats = tag_stats[tag_name]
+            stats["video_count"] += 1
+            stats["total_completion"] += completion_rate
+            if completion_rate >= 90:
+                stats["fully_watched"] += 1
+
+    # 计算标签平均完成率和完整观看率，并按观看数量筛选
+    filtered_tags = {}
+    for tag, stats in tag_stats.items():
+        if stats["video_count"] >= 5:  # 只保留视频数量>=5的标签
+            stats["average_completion_rate"] = round(stats["total_completion"] / stats["video_count"], 2)
+            stats["fully_watched_rate"] = round(stats["fully_watched"] / stats["video_count"] * 100, 2)
+            filtered_tags[tag] = stats
+
+    # 获取完成率最高的标签
+    top_completion_tags = dict(sorted(
+        filtered_tags.items(),
+        key=lambda x: x[1]["average_completion_rate"],
+        reverse=True
+    )[:10])
+
+    # 获取观看最多的标签
+    top_watched_tags = dict(sorted(
+        tag_distribution.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[:10])
+
+    return {
+        "tag_distribution": top_watched_tags,
+        "tag_completion_rates": top_completion_tags
+    }
+
+def generate_tag_analysis_insights(tag_data: dict) -> dict:
+    """生成标签分析相关的洞察"""
+    insights = {}
+
+    try:
+        # 标签偏好洞察
+        tag_distribution = tag_data.get("tag_distribution", {})
+        if tag_distribution:
+            top_tag = next(iter(tag_distribution.items()), None)
+            if top_tag:
+                insights["tag_preference"] = (
+                    f"你最喜欢观看{top_tag[0]}分区的视频，共观看了{top_tag[1]}个视频。"
+                )
+
+        # 标签完成率洞察
+        tag_completion = tag_data.get("tag_completion_rates", {})
+        if tag_completion:
+            top_completion = next(iter(tag_completion.items()), None)
+            if top_completion:
+                insights["tag_completion"] = (
+                    f"在经常观看的分区中，你对{top_completion[0]}分区的视频最感兴趣，"
+                    f"平均完成率达到{top_completion[1].get('average_completion_rate', 0)}%，"
+                    f"观看过{top_completion[1].get('video_count', 0)}个该分区的视频。"
+                )
+
+    except Exception as e:
+        print(f"Error generating tag analysis insights: {str(e)}")
+        insights["basic_tag"] = "暂时无法生成详细的标签分析。"
+
+    return insights
+
+@router.get("/tag-analysis", summary="获取标签分析")
+async def get_viewing_tag_analysis(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取标签分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含标签分析结果的响应
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'tag_analysis')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的标签分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的标签数据")
+
+        # 获取标签分析数据
+        tag_data = analyze_tag_analysis(cursor, table_name)
+
+        # 生成标签分析洞察
+        tag_insights = generate_tag_analysis_insights(tag_data)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "watch_counts": {"tag_distribution": tag_data["tag_distribution"]},
+                "completion_rates": {"tag_completion_rates": tag_data["tag_completion_rates"]},
+                "insights": tag_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的标签分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'tag_analysis', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+def analyze_duration_analysis(cursor, table_name: str) -> dict:
+    """专门分析视频时长数据"""
+    # 获取表结构
+    cursor.execute(f"PRAGMA table_info({table_name})")
+    columns = {col[1]: idx for idx, col in enumerate(cursor.fetchall())}
+
+    # 确保必要的列存在
+    required_columns = ['duration', 'view_at']
+    for col in required_columns:
+        if col not in columns:
+            raise ValueError(f"Required column '{col}' not found in table {table_name}")
+
+    # 获取所有历史记录
+    cursor.execute(f"SELECT * FROM {table_name}")
+    histories = cursor.fetchall()
+
+    print(f"Debug: 总共获取到 {len(histories)} 条历史记录")
+    if len(histories) > 0:
+        print(f"Debug: 第一条记录示例: {histories[0]}")
+        print(f"Debug: 列映射: {columns}")
+
+    # 时段分类
+    time_periods = {
+        '凌晨': {'start': 0, 'end': 6},
+        '上午': {'start': 6, 'end': 12},
+        '下午': {'start': 12, 'end': 18},
+        '晚上': {'start': 18, 'end': 24}
+    }
+
+    # 初始化时长相关性数据
+    duration_correlation = {}
+    for period in time_periods.keys():
+        duration_correlation[period] = {
+            '短视频': {'video_count': 0, 'total_duration': 0, 'avg_duration': 0},
+            '中等视频': {'video_count': 0, 'total_duration': 0, 'avg_duration': 0},
+            '长视频': {'video_count': 0, 'total_duration': 0, 'avg_duration': 0}
+        }
+
+    processed_count = 0
+    valid_count = 0
+
+    for history in histories:
+        processed_count += 1
+        try:
+            duration = float(history[columns['duration']]) if history[columns['duration']] else 0
+            view_at = history[columns['view_at']]
+
+            if not view_at or duration <= 0:
+                if processed_count <= 5:  # 只打印前5条的调试信息
+                    print(f"Debug: 跳过记录 {processed_count}: view_at={view_at}, duration={duration}")
+                continue
+
+            # 解析观看时间 - view_at 是 Unix 时间戳
+            from datetime import datetime
+            try:
+                # view_at 是 Unix 时间戳，需要转换为 datetime 对象
+                view_time = datetime.fromtimestamp(int(view_at))
+                hour = view_time.hour
+            except (ValueError, TypeError, OSError):
+                continue
+
+            # 确定时段
+            period = None
+            for p, time_range in time_periods.items():
+                if time_range['start'] <= hour < time_range['end']:
+                    period = p
+                    break
+
+            if not period:
+                continue
+
+            # 确定时长类型
+            if duration < 300:  # 5分钟以下
+                duration_type = '短视频'
+            elif duration < 1200:  # 20分钟以下
+                duration_type = '中等视频'
+            else:
+                duration_type = '长视频'
+
+            # 更新统计
+            stats = duration_correlation[period][duration_type]
+            stats['video_count'] += 1
+            stats['total_duration'] += duration
+            valid_count += 1
+
+            if valid_count <= 5:  # 只打印前5条有效记录的调试信息
+                print(f"Debug: 有效记录 {valid_count}: period={period}, duration_type={duration_type}, duration={duration}")
+
+        except (ValueError, TypeError):
+            if processed_count <= 5:
+                print(f"Debug: 数据转换失败，记录 {processed_count}")
+            continue
+
+    # 计算平均时长
+    for period in duration_correlation:
+        for duration_type in duration_correlation[period]:
+            stats = duration_correlation[period][duration_type]
+            if stats['video_count'] > 0:
+                stats['avg_duration'] = stats['total_duration'] / stats['video_count']
+
+    print(f"Debug: 处理完成 - 总记录数: {processed_count}, 有效记录数: {valid_count}")
+    print(f"Debug: 最终统计结果: {duration_correlation}")
+
+    return duration_correlation
+
+def generate_duration_analysis_insights(duration_data: dict) -> dict:
+    """生成视频时长分析相关的洞察"""
+    insights = {}
+
+    try:
+        # 计算总体时长偏好
+        total_counts = {'短视频': 0, '中等视频': 0, '长视频': 0}
+
+        for period in duration_data:
+            for duration_type in duration_data[period]:
+                total_counts[duration_type] += duration_data[period][duration_type]['video_count']
+
+        if sum(total_counts.values()) > 0:
+            # 找出最喜欢的时长类型
+            preferred_type = max(total_counts.items(), key=lambda x: x[1])
+            total_videos = sum(total_counts.values())
+            preference_rate = round(preferred_type[1] / total_videos * 100, 1)
+
+            # 找出最活跃的时段和对应的时长偏好
+            max_period_count = 0
+            max_period = None
+            max_period_type = None
+
+            for period in duration_data:
+                for duration_type in duration_data[period]:
+                    count = duration_data[period][duration_type]['video_count']
+                    if count > max_period_count:
+                        max_period_count = count
+                        max_period = period
+                        max_period_type = duration_type
+
+            insights["duration_preference"] = (
+                f"你最喜欢观看{preferred_type[0]}，占总观看量的{preference_rate}%。"
+                f"特别是在{max_period}时段，你更偏向于观看{max_period_type}。"
+            )
+
+    except Exception as e:
+        print(f"Error generating duration analysis insights: {str(e)}")
+        insights["basic_duration"] = "暂时无法生成详细的时长分析。"
+
+    return insights
+
+@router.get("/duration-analysis", summary="获取视频时长分析")
+async def get_viewing_duration_analysis(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用当前年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True。如果为False则重新分析数据")
+):
+    """获取视频时长分析
+
+    Args:
+        year: 要分析的年份，不传则使用当前年份
+        use_cache: 是否使用缓存，默认为True。如果为False则重新分析数据
+
+    Returns:
+        dict: 包含视频时长分析结果的响应
+    """
+    # 验证年份并获取表名
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years  # 这里是错误响应
+
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+
+        # 如果启用缓存，尝试从缓存获取
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'duration_analysis')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的视频时长分析数据")
+                return cached_response
+
+        print(f"开始分析 {target_year} 年的视频时长数据")
+
+        # 获取视频时长分析数据
+        duration_data = analyze_duration_analysis(cursor, table_name)
+
+        # 生成时长分析洞察
+        duration_insights = generate_duration_analysis_insights(duration_data)
+
+        # 构建响应
+        response = {
+            "status": "success",
+            "data": {
+                "duration_correlation": duration_data,
+                "insights": duration_insights,
+                "year": target_year,
+                "available_years": available_years
+            }
+        }
+
+        # 更新缓存
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的视频时长分析数据缓存")
+        pattern_cache.cache_patterns(table_name, 'duration_analysis', response)
+
+        return response
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
