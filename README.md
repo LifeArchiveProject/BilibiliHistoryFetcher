@@ -205,6 +205,7 @@ BilibiliHistoryAnalyzer.exe
 - [Yutto](https://yutto.nyakku.moe/) - 可爱的 B 站视频下载工具，本项目使用其进行视频下载功能
 - [FasterWhisper](https://github.com/SYSTRAN/faster-whisper) - 音频转文字，本项目使用其进行视频音频转文字功能
 - [DeepSeek](https://github.com/deepseek-ai/DeepSeek-R1) - DeepSeek AI API，本项目使用其进行 AI 摘要生成
+- [one-balance](https://github.com/glidea/one-balance) - 智能的 AI API 密钥负载均衡器，提供更稳定可靠的 AI 服务调用
 - [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) - 强大且灵活的 HTML5 视频播放器
 - [aicu.cc](https://www.aicu.cc/) - 第三方 B 站用户评论 API
 - [方舟像素字体](https://github.com/TakWolf/ark-pixel-font) - 开源的泛中日韩像素字体
