@@ -857,10 +857,10 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
                             import hashlib
                             if video_info["cover"]:
                                 cover_hash = hashlib.md5(video_info["cover"].encode()).hexdigest()
-                                video_info["cover"] = f"http://localhost:8899/images/local/covers/{cover_hash}"
+                                video_info["cover"] = f"/images/local/covers/{cover_hash}"
                             if video_info["author_face"]:
                                 avatar_hash = hashlib.md5(video_info["author_face"].encode()).hexdigest()
-                                video_info["author_face"] = f"http://localhost:8899/images/local/avatars/{avatar_hash}"
+                                video_info["author_face"] = f"/images/local/avatars/{avatar_hash}"
 
                         print(f"【调试】从元数据获取到视频信息：{video_info['title']}，封面 URL: {video_info['cover'][:50]}...")
                     except Exception as e:
@@ -927,10 +927,10 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
                             import hashlib
                             if video_info["cover"]:
                                 cover_hash = hashlib.md5(video_info["cover"].encode()).hexdigest()
-                                video_info["cover"] = f"http://localhost:8899/images/local/covers/{cover_hash}"
+                                video_info["cover"] = f"/images/local/covers/{cover_hash}"
                             if video_info["author_face"]:
                                 avatar_hash = hashlib.md5(video_info["author_face"].encode()).hexdigest()
-                                video_info["author_face"] = f"http://localhost:8899/images/local/avatars/{avatar_hash}"
+                                video_info["author_face"] = f"/images/local/avatars/{avatar_hash}"
 
                         print(f"【调试】从 NFO 文件获取到视频信息：{video_info['title']}，封面 URL: {video_info['cover'][:50] if video_info['cover'] else 'None'}")
                     except Exception as e:
@@ -1007,10 +1007,10 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
                                             import hashlib
                                             if video_info["cover"]:
                                                 cover_hash = hashlib.md5(video_info["cover"].encode()).hexdigest()
-                                                video_info["cover"] = f"http://localhost:8899/images/local/covers/{cover_hash}"
+                                                video_info["cover"] = f"/images/local/covers/{cover_hash}"
                                             if video_info["author_face"]:
                                                 avatar_hash = hashlib.md5(video_info["author_face"].encode()).hexdigest()
-                                                video_info["author_face"] = f"http://localhost:8899/images/local/avatars/{avatar_hash}"
+                                                video_info["author_face"] = f"/images/local/avatars/{avatar_hash}"
                     except Exception as e:
                         print(f"获取视频信息时出错：{str(e)}")
 
@@ -1126,10 +1126,10 @@ async def list_downloaded_videos(search_term: Optional[str] = None, limit: int =
                                         import hashlib
                                         if video_cover:
                                             cover_hash = hashlib.md5(video_cover.encode()).hexdigest()
-                                            video_cover = f"http://localhost:8899/images/local/covers/{cover_hash}"
+                                            video_cover = f"/images/local/covers/{cover_hash}"
                                         if video_author_face:
                                             avatar_hash = hashlib.md5(video_author_face.encode()).hexdigest()
-                                            video_author_face = f"http://localhost:8899/images/local/avatars/{avatar_hash}"
+                                            video_author_face = f"/images/local/avatars/{avatar_hash}"
 
                                 except Exception as e:
                                     print(f"解析子视频NFO文件时出错：{str(e)}")

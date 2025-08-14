@@ -160,8 +160,8 @@ def _process_image_url(url: str, image_type: str, use_local: bool, use_sessdata:
             print(f"无效的图片类型: {image_type}")
             return url
 
-        # 构建本地图片URL
-        base_url = "http://localhost:8899/images/local"
+        # 构建本地图片URL（返回相对路径，前端自行拼接域名）
+        base_url = "/images/local"
         local_url = f"{base_url}/{image_type}/{file_hash}"
 
         return local_url
