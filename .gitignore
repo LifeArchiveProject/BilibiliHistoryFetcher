@@ -517,3 +517,4 @@ Temporary Items
 /cache/
 /.vscode/
 /.idea/.gitignore
+/.claude/

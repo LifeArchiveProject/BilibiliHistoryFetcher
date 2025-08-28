@@ -12,6 +12,7 @@ warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escap
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from routers import (
@@ -44,11 +45,12 @@ from routers import (
     popular_videos,
     popular_analytics,
     bilibili_history_delete,
-    video_details
+    video_details,
+    dynamic
 )
 from scripts.scheduler_db_enhanced import EnhancedSchedulerDB
 from scripts.scheduler_manager import SchedulerManager
-from scripts.utils import load_config
+from scripts.utils import load_config, get_output_path
 
 
 # 配置日志系统
@@ -437,6 +439,15 @@ app.include_router(popular_videos.router, prefix="/bilibili", tags=["B站热门"
 app.include_router(popular_analytics.router, prefix="/popular", tags=["热门视频分析"])
 app.include_router(bilibili_history_delete.router, prefix="/bilibili/history", tags=["B站历史记录删除"])
 app.include_router(video_details.router, prefix="/video_details", tags=["视频详情"])
+app.include_router(dynamic.router, prefix="/dynamic", tags=["用户动态"])
+
+# 挂载静态目录，提供 output 下资源的访问（/static/ 相对路径）
+try:
+    static_dir = os.path.dirname(get_output_path("__base__"))
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info(f"已挂载静态目录: /static -> {static_dir}")
+except Exception as e:
+    logger.warning(f"静态目录挂载失败（忽略）: {e}")
 
 # 入口点，启动应用
 if __name__ == "__main__":
