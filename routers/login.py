@@ -7,6 +7,8 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
 from loguru import logger
 from scripts.utils import load_config, get_output_path, setup_logger
+from datetime import datetime
+from scripts.send_log_email import send_email
 
 # 确保日志系统已初始化
 setup_logger()
@@ -455,4 +457,129 @@ async def check_login_status():
         raise HTTPException(
             status_code=500,
             detail=f"检查登录状态失败: {str(e)}"
+        )
+@router.get("/check-and-notify", summary="检查SESSDATA并在失效时发送邮件")
+async def check_and_notify():
+    """检查SESSDATA有效性；若失效则发送邮件告警（状态变为失效时仅告警一次）"""
+    try:
+        print("检查SESSDATA并发送告警（如失效）...")
+
+        # 获取配置与SESSDATA
+        current_config = get_current_config()
+        sessdata = current_config.get('SESSDATA', '')
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Cookie': f'SESSDATA={sessdata}'
+        }
+
+        valid = False
+        detail = {}
+        error_message = None
+
+        if not sessdata:
+            error_message = "SESSDATA 未配置或为空"
+        else:
+            try:
+                resp = requests.get(
+                    'https://api.bilibili.com/x/web-interface/nav',
+                    headers=headers,
+                    timeout=10
+                )
+                status_code = resp.status_code
+                print(f"API响应状态码: {status_code}")
+                try:
+                    data = resp.json() if status_code == 200 else {}
+                except Exception:
+                    data = {}
+                detail = data
+
+                # code == 0 表示已登录有效
+                if status_code == 200 and isinstance(data, dict) and data.get('code') == 0:
+                    valid = True
+                else:
+                    err_msg = ""
+                    if isinstance(data, dict):
+                        err_msg = data.get('message', '') or (data.get('data', {}) or {}).get('message', '')
+                    if not err_msg:
+                        err_msg = f"HTTP {status_code}"
+                    error_message = f"登录失效或异常: {err_msg}"
+            except Exception as e:
+                error_message = f"请求验证接口失败: {str(e)}"
+
+        # 状态文件（用于去重，仅在状态从有效->失效时告警一次）
+        state_path = get_output_path('state/sessdata_monitor.json')
+        last_alert_ts = 0
+        last_status = "unknown"
+        try:
+            if os.path.exists(state_path):
+                with open(state_path, 'r', encoding='utf-8') as f:
+                    st = json.load(f)
+                    last_alert_ts = st.get('last_alert_ts', 0)
+                    last_status = st.get('last_status', 'unknown')
+        except Exception:
+            pass
+
+        now_ts = int(time.time())
+        notified = False
+
+        if valid:
+            # 更新状态为有效
+            try:
+                os.makedirs(os.path.dirname(state_path), exist_ok=True)
+                with open(state_path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'last_status': 'valid',
+                        'last_valid_ts': now_ts
+                    }, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"写入状态文件失败: {e}")
+
+            return {
+                "status": "success",
+                "message": "SESSDATA 有效",
+                "data": {"valid": True, "detail": detail}
+            }
+
+        # 若失效则发送邮件（仅当上次状态不是 invalid 时触发）
+        if last_status != 'invalid':
+            subject = "B站登录状态失效，请尽快重新登录"
+            body = "\n".join([
+                f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"原因: {error_message or '未知'}",
+                f"原始返回: {json.dumps(detail, ensure_ascii=False) if isinstance(detail, dict) else str(detail)}"
+            ])
+
+            try:
+                send_res = await send_email(subject=subject, content=body)
+                print(f"告警邮件发送结果: {send_res}")
+                notified = (send_res or {}).get("status") == "success"
+            except Exception as e:
+                print(f"发送告警邮件失败: {e}")
+
+            # 更新为失效状态
+            try:
+                os.makedirs(os.path.dirname(state_path), exist_ok=True)
+                with open(state_path, 'w', encoding='utf-8') as f:
+                    json.dump({
+                        'last_status': 'invalid',
+                        'last_alert_ts': now_ts,
+                        'last_error': error_message
+                    }, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"写入状态文件失败: {e}")
+        else:
+            print("状态已为失效，跳过重复告警")
+
+        return {
+            "status": "success",
+            "message": "SESSDATA 已失效" + ("（已发送邮件）" if notified else "（未重复发送）"),
+            "data": {"valid": False, "notified": notified, "detail": detail}
+        }
+
+    except Exception as e:
+        print(f"检查与告警流程失败: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"检查与告警流程失败: {str(e)}"
         )

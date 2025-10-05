@@ -165,6 +165,100 @@ class SchedulerManager:
                     task_id = task_data['task_id']
                     self.tasks[task_id] = task_data
 
+                # 合并配置文件中新定义但数据库不存在的任务（便于新增任务生效）
+                try:
+                    if 'tasks' in config:
+                        existing_ids = {t['task_id'] for t in main_tasks}
+                        for new_task_id, task_cfg in config['tasks'].items():
+                            if new_task_id in existing_ids:
+                                continue
+                            # 解析调度配置
+                            schedule_cfg = task_cfg.get('schedule', {})
+                            schedule_type = schedule_cfg.get('type', 'daily')
+                            schedule_time = schedule_cfg.get('time') if schedule_type == 'daily' else None
+                            schedule_delay = schedule_cfg.get('delay') if schedule_type == 'once' else None
+                            interval_value = None
+                            interval_unit = None
+                            if schedule_type == 'interval':
+                                interval_value = schedule_cfg.get('interval_value', schedule_cfg.get('value'))
+                                interval_unit = schedule_cfg.get('interval_unit', schedule_cfg.get('unit'))
+
+                            merged_task_data = {
+                                'name': task_cfg.get('name', new_task_id),
+                                'endpoint': task_cfg.get('endpoint', ''),
+                                'method': task_cfg.get('method', 'GET'),
+                                'params': task_cfg.get('params', {}),
+                                'task_type': 'main',
+                                'parent_id': None,
+                                'sequence_number': None,
+                                'schedule_type': schedule_type,
+                                'schedule_time': schedule_time,
+                                'schedule_delay': schedule_delay,
+                                'interval_value': interval_value,
+                                'interval_unit': interval_unit,
+                                'enabled': True
+                            }
+                            self.db.create_main_task(new_task_id, merged_task_data)
+                            self.tasks[new_task_id] = merged_task_data
+
+                            # 写入依赖关系
+                            for dep in task_cfg.get('requires', []):
+                                self.db.add_task_dependency(new_task_id, dep)
+
+                        logger.info("已合并配置文件中的新增任务到数据库")
+                except Exception as merge_ex:
+                    logger.warning(f"合并配置任务时出错（忽略）: {merge_ex}")
+
+            # 应用 config.yaml 中的登录监控覆盖（开关与间隔）
+            try:
+                main_cfg = load_config()
+                monitor_cfg = (main_cfg.get('server') or {}).get('login_monitor') or {}
+                monitor_enabled = bool(monitor_cfg.get('enabled', True))
+                monitor_interval = int(monitor_cfg.get('interval_minutes', 10))
+                task_id = 'sessdata_health_check'
+
+                base_task = {
+                    'name': 'SESSDATA健康检查',
+                    'endpoint': '/login/check-and-notify',
+                    'method': 'GET',
+                    'params': {},
+                    'task_type': 'main',
+                    'parent_id': None,
+                    'sequence_number': None,
+                    'schedule_type': 'interval',
+                    'schedule_time': None,
+                    'schedule_delay': None,
+                    'interval_value': monitor_interval,
+                    'interval_unit': 'minutes',
+                    'enabled': 1 if monitor_enabled else 0
+                }
+
+                if task_id in self.tasks:
+                    self.tasks[task_id].update({
+                        'schedule_type': 'interval',
+                        'schedule_time': None,
+                        'interval_value': monitor_interval,
+                        'interval_unit': 'minutes',
+                        'enabled': 1 if monitor_enabled else 0
+                    })
+                    try:
+                        self.db.update_main_task(task_id, {
+                            'schedule_type': 'interval',
+                            'schedule_time': None,
+                            'interval_value': monitor_interval,
+                            'interval_unit': 'minutes',
+                            'enabled': 1 if monitor_enabled else 0
+                        })
+                    except Exception:
+                        pass
+                else:
+                    if monitor_enabled:
+                        self.db.create_main_task(task_id, base_task)
+                        self.tasks[task_id] = base_task
+                        logger.info("已根据配置创建登录监控任务 sessdata_health_check")
+            except Exception as e:
+                logger.warning(f"应用登录监控覆盖失败（忽略）: {e}")
+
             # 构建任务链
             self._build_task_chains()
 

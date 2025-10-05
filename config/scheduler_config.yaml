@@ -24,6 +24,18 @@ tasks:
       interval_value: 10
       interval_unit: minutes
 
+  # 每10分钟校验SESSDATA并在失效时发送邮件
+  sessdata_health_check:
+    endpoint: /login/check-and-notify
+    method: GET
+    name: SESSDATA健康检查
+    params: {}
+    requires: []
+    schedule:
+      type: interval
+      interval_value: 10
+      interval_unit: minutes
+
   # 1. 无依赖的基础任务
   fetch_history:
     endpoint: /fetch/bili-history
