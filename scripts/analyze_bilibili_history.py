@@ -335,6 +335,11 @@ def get_daily_and_monthly_counts(target_year=None):
         daily_count = {}
         monthly_count = {}
         total_count = 0
+
+        # 新增: 时长统计
+        daily_watch_seconds = {}
+        monthly_watch_seconds = {}
+        total_watch_seconds = 0
         
         # 分析每个年份的数据
         for year in years_to_analyze:
@@ -351,6 +356,26 @@ def get_daily_and_monthly_counts(target_year=None):
             """)
             year_daily_count = {row[0]: row[1] for row in cursor.fetchall()}
             daily_count.update(year_daily_count)
+
+            # 获取每日观看总时长（秒），使用localtime进行时区转换
+            cursor.execute(f"""
+                SELECT
+                    strftime('%Y-%m-%d', datetime(view_at, 'unixepoch', 'localtime')) as date,
+                    SUM(
+                        CASE
+                            WHEN progress = -1 THEN duration
+                            WHEN progress IS NULL THEN 0
+                            WHEN progress >= 0 THEN CASE WHEN progress > duration THEN duration ELSE progress END
+                            ELSE 0
+                        END
+                    ) as seconds
+                FROM {table_name}
+                GROUP BY date
+                ORDER BY date
+            """)
+            year_daily_watch = {row[0]: int(row[1] or 0) for row in cursor.fetchall()}
+            daily_watch_seconds.update(year_daily_watch)
+            total_watch_seconds += sum(year_daily_watch.values())
             
             # 获取每月观看数量，使用localtime进行时区转换
             cursor.execute(f"""
@@ -363,6 +388,25 @@ def get_daily_and_monthly_counts(target_year=None):
             """)
             year_monthly_count = {row[0]: row[1] for row in cursor.fetchall()}
             monthly_count.update(year_monthly_count)
+
+            # 获取每月观看总时长（秒），使用localtime进行时区转换
+            cursor.execute(f"""
+                SELECT
+                    strftime('%Y-%m', datetime(view_at, 'unixepoch', 'localtime')) as month,
+                    SUM(
+                        CASE
+                            WHEN progress = -1 THEN duration
+                            WHEN progress IS NULL THEN 0
+                            WHEN progress >= 0 THEN CASE WHEN progress > duration THEN duration ELSE progress END
+                            ELSE 0
+                        END
+                    ) as seconds
+                FROM {table_name}
+                GROUP BY month
+                ORDER BY month
+            """)
+            year_monthly_watch = {row[0]: int(row[1] or 0) for row in cursor.fetchall()}
+            monthly_watch_seconds.update(year_monthly_watch)
             
             # 计算该年份的总数
             total_count += sum(year_daily_count.values())
@@ -396,7 +440,10 @@ def get_daily_and_monthly_counts(target_year=None):
         return {
             "daily_count": daily_count,
             "monthly_count": monthly_count,
-            "total_count": total_count
+            "total_count": total_count,
+            "daily_watch_seconds": daily_watch_seconds,
+            "monthly_watch_seconds": monthly_watch_seconds,
+            "total_watch_seconds": total_watch_seconds
         }
         
     except sqlite3.Error as e:

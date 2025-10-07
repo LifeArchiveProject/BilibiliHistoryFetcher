@@ -171,7 +171,7 @@ async def get_daily_count(
             
         # 查询所有类型的条目数量
         query = f"""
-            SELECT 
+            SELECT
                 business,
                 COUNT(*) as count
             FROM {table_name}
@@ -181,6 +181,24 @@ async def get_daily_count(
         
         cursor.execute(query, (start_timestamp, end_timestamp))
         results = cursor.fetchall()
+
+        # 统计当天观看总时长（秒）
+        cursor.execute(f"""
+            SELECT
+                SUM(
+                    CASE
+                        WHEN progress = -1 THEN duration
+                        WHEN progress IS NULL THEN 0
+                        WHEN progress >= 0 THEN
+                            CASE WHEN progress > duration THEN duration ELSE progress END
+                        ELSE 0
+                    END
+                ) AS total_watch_seconds
+            FROM {table_name}
+            WHERE view_at >= ? AND view_at < ?
+        """, (start_timestamp, end_timestamp))
+        watch_row = cursor.fetchone()
+        total_watch_seconds = int(watch_row[0]) if watch_row and watch_row[0] is not None else 0
         
         # 计算总数并按类型分类
         total_count = 0
@@ -197,7 +215,8 @@ async def get_daily_count(
             "data": {
                 "date": target_date.strftime("%Y-%m-%d"),
                 "total_count": total_count,
-                "type_counts": type_counts
+                "type_counts": type_counts,
+                "total_watch_seconds": total_watch_seconds
             }
         }
         
