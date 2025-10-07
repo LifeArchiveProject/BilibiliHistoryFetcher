@@ -57,14 +57,28 @@ def main():
         # 启用多进程支持
         freeze_support()
         
-        logger.info("正在启动服务器...")
-        logger.info("API文档:http://0.0.0.0:8899/docs")
+        # 读取配置中的主机与端口
+        from scripts.utils import load_config
+        try:
+            cfg = load_config()
+            server_cfg = cfg.get('server', {})
+            host = str(server_cfg.get('host', '0.0.0.0'))
+            try:
+                port = int(server_cfg.get('port', 8899))
+            except Exception:
+                port = 8899
+        except Exception:
+            host = "0.0.0.0"
+            port = 8899
+
+        logger.info(f"正在启动服务器...")
+        logger.info(f"API文档:http://{host}:{port}/docs")
         
         # 启动FastAPI应用
         uvicorn.run(
             "main:app",
-            host="0.0.0.0",
-            port=8899,
+            host=host,
+            port=port,
             reload=False
         )
     except Exception as e:
