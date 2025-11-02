@@ -35,6 +35,7 @@
   - [x] 批量收藏
   - [x] 一键下载收藏夹所有视频
 - [x] 获取视频被全站观看的总时长
+- [x] 最多找回14天内b站所有在屏幕上显示过的图片
 
 ## 后续开发计划
 
@@ -235,6 +236,36 @@ python build.py
 # Windows系统
 BilibiliHistoryAnalyzer.exe
 ```
+
+## 缓存图片找回（近 14 天）
+
+适用范围：找回 B 站 App 在过去最多 14 天内曾在屏幕上显示过的图片，包含但不限于：
+- 视频封面
+- UP 主头像
+- 推荐页视频封面（含未点开）
+- 评论区图片
+- 动态图片
+- 表情包
+- 广告图片
+
+手机端准备（MT 管理器）：
+- 打开 MT 管理器，前往 `/storage/emulated/0/Android/data/tv.danmaku.bili/cache`
+- 长按 `cache` 文件夹，选择“压缩”，生成一个 zip 压缩包
+
+电脑端操作：
+- 下载可执行文件 `BiliImagePipeline.exe`（Windows）：https://github.com/2977094657/BilibiliHistoryFetcher/releases/download/v1.6.5/BiliImagePipeline.exe
+- 将手机导出的 `cache` 压缩包放到可执行文件所在目录（与 `.exe` 同级）
+- 运行可执行文件，等待自动处理
+- 处理完成后，在 `cache/ImagePipeLine/v2.ols100.1/by_date` 查看图片
+
+查看与定位：
+- 图片已按分辨率分组，视频封面通常集中在高分辨率文件夹，便于快速浏览
+- 可按日期结构快速定位最近内容
+
+已知问题：
+- 小分辨率图片在资源管理器里可能无法预览（多见于表情、头像），使用浏览器打开可正常显示
+- 14 天为缓存可取回的上限，超过时间窗口的内容通常已被系统清理，无法恢复
+- 若无法直接从手机导出上述路径，请先在手机端完成压缩再拷贝 zip
 
 ## 贡献指南
 
