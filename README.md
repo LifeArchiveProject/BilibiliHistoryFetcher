@@ -18,6 +18,12 @@
 ## 介绍
 该项目用于获取、处理、分析和可视化哔哩哔哩用户的观看历史数据。它提供了完整的数据处理流程，从数据获取到可视化展示，并支持自动化运行和邮件通知。
 
+## 零基础快速运行（Windows 免安装版，推荐）
+
+1. 下载 exe：后端 https://github.com/2977094657/BilibiliHistoryFetcher/releases/latest
+2. 下载 exe：前端 https://github.com/2977094657/BiliHistoryFrontend/releases/latest
+3. 两个都双击运行即可
+
 ## 配套前端
 请前往此项目 [BiliHistoryFrontend](https://github.com/2977094657/BiliHistoryFrontend) 获取配套的前端界面
 
