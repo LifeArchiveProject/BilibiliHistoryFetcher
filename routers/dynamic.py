@@ -18,6 +18,7 @@ from scripts.dynamic_db import (
     purge_host,
 )
 from scripts.dynamic_media import collect_image_urls, download_images, predict_image_path, collect_live_media_urls, download_live_media, collect_emoji_urls, download_emojis
+from scripts.wbi_sign import get_wbi_sign
 
 # 确保日志系统已初始化
 setup_logger()
@@ -206,20 +207,35 @@ async def list_db_space(
 
 
 def get_headers() -> Dict[str, str]:
-    """获取请求头"""
+    """获取请求头（包含完整的浏览器模拟 Headers 以避免 412 风控）"""
     config = load_config()
     sessdata = config.get("SESSDATA", "")
-    
+
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-        'Referer': 'https://www.bilibili.com/',
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     }
-    
+
+    cookie_parts = []
     if sessdata:
-        headers['Cookie'] = f'SESSDATA={sessdata}'
-    
+        cookie_parts.append(f'SESSDATA={sessdata}')
+    bili_jct = config.get("bili_jct", "")
+    if bili_jct:
+        cookie_parts.append(f'bili_jct={bili_jct}')
+    dede_user_id = config.get("DedeUserID", "")
+    if dede_user_id:
+        cookie_parts.append(f'DedeUserID={dede_user_id}')
+    dede_ck = config.get("DedeUserID__ckMd5", "")
+    if dede_ck:
+        cookie_parts.append(f'DedeUserID__ckMd5={dede_ck}')
+    buvid3 = config.get("buvid3", "")
+    if buvid3:
+        cookie_parts.append(f'buvid3={buvid3}')
+
+    if cookie_parts:
+        headers['Cookie'] = '; '.join(cookie_parts)
+
     return headers
 
 
@@ -246,7 +262,11 @@ async def fetch_dynamic_data(api_url: str, params: Dict[str, Any]) -> Dict[str, 
                     logger.info(f"成功获取动态数据，状态码: {response.status}")
                     return data
                 else:
-                    logger.error(f"请求失败，状态码: {response.status}")
+                    try:
+                        error_text = (await response.text())[:512]
+                    except Exception:
+                        error_text = ""
+                    logger.error(f"请求失败，状态码: {response.status} url={api_url} params={params} body={error_text}")
                     raise HTTPException(status_code=response.status, detail=f"请求失败: {response.status}")
         except aiohttp.ClientError as e:
             logger.error(f"网络请求错误: {e}")
@@ -270,10 +290,13 @@ async def auto_fetch_all(
     import json, time, random
 
     api_url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
-    params = {
-        "host_mid": host_mid, 
+    base_params = {
+        "host_mid": host_mid,
         "need_top": 1 if need_top else 0,
-        "features": "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard"
+        "features": "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard",
+        "timezone_offset": -480,
+        "platform": "web",
+        "web_location": "333.1387",
     }
 
     # 读取 host 元数据
@@ -338,15 +361,18 @@ async def auto_fetch_all(
             # 调试信息：打印每页请求的参数
             logger.info(f"[DEBUG] === 第 {current_page + 1} 页请求 ===")
             logger.info(f"[DEBUG] 当前next_offset: {next_offset}")
-            
+
+            # 基础参数 + 当页 offset
+            params = dict(base_params)
             if next_offset:
                 params["offset"] = next_offset
                 logger.info(f"[DEBUG] 设置offset参数: {next_offset}")
-            elif "offset" in params:
-                params.pop("offset", None)
-                logger.info(f"[DEBUG] 移除offset参数（从头开始）")
-            
-            logger.info(f"[DEBUG] 最终请求参数: {params}")
+            else:
+                logger.info(f"[DEBUG] 本次请求不带offset（从头开始或已到底）")
+
+            # 为参数添加 WBI 签名
+            signed_params = get_wbi_sign(params)
+            logger.info(f"[DEBUG] 最终请求参数（已签名）: {signed_params}")
 
             # 更新进度：准备抓取下一页
             if current_page > 0:
@@ -355,7 +381,7 @@ async def auto_fetch_all(
             # 随机延迟3-5秒
             await asyncio.sleep(random.uniform(3, 5))
 
-            data = await fetch_dynamic_data(api_url, params)
+            data = await fetch_dynamic_data(api_url, signed_params)
             
             # 调试信息：打印API响应中的offset信息
             logger.info(f"[DEBUG] API响应结构检查:")
@@ -632,11 +658,11 @@ async def get_space_dynamic(
     """
     try:
         api_url = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
-        
+
         params = {
             "host_mid": host_mid,
             "need_top": 1 if need_top else 0,
-            "features": "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard"
+            "features": "itemOpusStyle,listOnlyfans,opusBigCover,onlyfansVote,forwardListHidden,decorationCard,commentsNewVersion,onlyfansAssetsV2,ugcDelete,onlyfansQaCard",
         }
         
         logger.info(f"请求用户 {host_mid} 的空间动态，参数: {params}, pages={pages}")
