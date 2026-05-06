@@ -1,6 +1,5 @@
 import asyncio
 import os
-import platform
 import sys
 import traceback
 import warnings
@@ -35,9 +34,6 @@ from routers import (
     delete_history,
     image_downloader,
     scheduler,
-    video_summary,
-    deepseek,
-    audio_to_text,
     email_config,
     comment,
     data_sync,
@@ -247,22 +243,6 @@ def setup_logging():
 # 在应用启动时调用
 setup_logging()
 
-# 检查系统资源（针对Linux系统）
-is_linux = platform.system().lower() == "linux"
-if is_linux:
-    try:
-        from scripts.system_resource_check import check_system_resources
-        resources = check_system_resources()
-        if not resources["summary"]["can_run_speech_to_text"]:
-            limitation = resources.get("summary", {}).get("resource_limitation", "未知原因")
-            logger.warning(f"警告: 系统资源不足，语音转文字功能将被禁用。限制原因: {limitation}")
-            logger.info(f"系统信息: 内存: {resources['memory']['total_gb']}GB (可用: {resources['memory']['available_gb']}GB), "
-                      f"CPU: {resources['cpu']['physical_cores']}核心, 磁盘可用空间: {resources['disk']['free_gb']}GB")
-    except ImportError:
-        logger.warning("警告: 未安装psutil模块，无法检查系统资源。如需使用语音转文字功能，请安装psutil: pip install psutil")
-    except Exception as e:
-        logger.warning(f"警告: 检查系统资源时出错: {str(e)}")
-
 # 全局调度器实例
 scheduler_manager = None
 
@@ -428,9 +408,6 @@ app.include_router(daily_count.router, prefix="/daily", tags=["每日观看统�
 app.include_router(delete_history.router, prefix="/delete", tags=["删除历史记录"])
 app.include_router(image_downloader.router, prefix="/images", tags=["图片下载管理"])
 app.include_router(scheduler.router, prefix="/scheduler", tags=["计划任务管理"])
-app.include_router(video_summary.router, prefix="/summary", tags=["视频摘要"])
-app.include_router(deepseek.router, prefix="/deepseek", tags=["DeepSeek AI"])
-app.include_router(audio_to_text.router, prefix="/audio_to_text", tags=["音频转文字"])
 app.include_router(email_config.router, prefix="/config", tags=["配置管理"])
 app.include_router(comment.router, prefix="/comment", tags=["评论管理"])
 app.include_router(data_sync.router, prefix="/data_sync", tags=["数据同步与完整性检查"])

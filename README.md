@@ -35,7 +35,6 @@
   - [x] 一键下载用户所有投稿视频
 - [x] 用户动态下载
 - [x] 自动化任务
-- [x] AI 摘要
 - [x] 获取用户评论
 - [x] 获取收藏夹
   - [x] 批量收藏
@@ -217,8 +216,6 @@ python main.py
 - `history_by_date/YYYY/MM/DD.json`：按日期归档的观看历史快照。
 - `api_responses/`：原始 API 响应缓存（便于重放/排错）。
 - `analytics/` 与根目录下的 `daily_count_*.json`、`monthly_count_*.json`：统计汇总结果。
-- `summary/`、`BSummary/`：AI 摘要、提纲与结果文本/JSON。
-- `stt/`：语音转文字（Speech-to-Text）结果。
 - `download_video/`：已下载的视频内容及相关封面/海报等资源。
 - `images/`：用户头像、封面及孤立资源缓存。
 - `cache/image_proxy/`：图片代理缓存（可再生成）。
@@ -317,8 +314,6 @@ BilibiliHistoryAnalyzer.exe
 
 - [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) - 哔哩哔哩-API 收集整理，本项目使用其 API 接口获取 B 站用户数据
 - [Yutto](https://yutto.nyakku.moe/) - 可爱的 B 站视频下载工具，本项目使用其进行视频下载功能
-- [FasterWhisper](https://github.com/SYSTRAN/faster-whisper) - 音频转文字，本项目使用其进行视频音频转文字功能
-- [DeepSeek](https://github.com/deepseek-ai/DeepSeek-R1) - DeepSeek AI API，本项目使用其进行 AI 摘要生成
 - [ArtPlayer](https://github.com/zhw2590582/ArtPlayer) - 强大且灵活的 HTML5 视频播放器
 - [aicu.cc](https://www.aicu.cc/) - 第三方 B 站用户评论 API
 - [小黑盒用户 shengyI](https://www.xiaoheihe.cn/app/bbs/link/153880174) - 视频观看总时长功能思路提供者
