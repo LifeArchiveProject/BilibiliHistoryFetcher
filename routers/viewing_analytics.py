@@ -1,6 +1,8 @@
+import json
+import os
 import sqlite3
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Query, HTTPException
 
@@ -2135,6 +2137,432 @@ async def get_viewing_duration_analysis(
 
         return response
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+
+def collect_annual_summary_data(cursor, table_name: str, target_year: int) -> Dict[str, Any]:
+    """
+    收集年度总结的所有统计数据
+    
+    Args:
+        cursor: 数据库游标
+        table_name: 表名
+        target_year: 目标年份
+    
+    Returns:
+        Dict[str, Any]: 包含所有统计数据的字典
+    """
+    
+    summary_data = {
+        "year": target_year,
+        "generated_at": datetime.now().isoformat(),
+        "statistics": {},
+        "insights": {}
+    }
+    
+    try:
+        print(f"开始收集 {target_year} 年的年度总结数据...")
+        
+        monthly_stats = analyze_monthly_stats(cursor, table_name)
+        summary_data["statistics"]["monthly"] = monthly_stats
+        
+        weekly_stats = analyze_weekly_stats(cursor, table_name)
+        summary_data["statistics"]["weekly"] = weekly_stats
+        
+        time_slots = analyze_time_slots(cursor, table_name)
+        summary_data["statistics"]["time_slots"] = time_slots
+        
+        viewing_continuity = analyze_viewing_continuity(cursor, table_name)
+        summary_data["statistics"]["viewing_continuity"] = viewing_continuity
+        
+        viewing_details = analyze_viewing_details(cursor, table_name)
+        summary_data["statistics"]["viewing_details"] = viewing_details
+        
+        watch_counts = analyze_video_watch_counts(cursor, table_name)
+        summary_data["statistics"]["watch_counts"] = watch_counts
+        
+        completion_rates = analyze_completion_rates(cursor, table_name)
+        summary_data["statistics"]["completion_rates"] = completion_rates
+        
+        author_completion = analyze_author_completion_rates(cursor, table_name)
+        summary_data["statistics"]["author_completion"] = author_completion
+        
+        tag_analysis = analyze_tag_analysis(cursor, table_name)
+        summary_data["statistics"]["tag_analysis"] = tag_analysis
+        
+        duration_analysis = analyze_duration_analysis(cursor, table_name)
+        summary_data["statistics"]["duration_analysis"] = duration_analysis
+        
+        summary_data["insights"]["monthly"] = generate_monthly_insights(monthly_stats)
+        summary_data["insights"]["weekly"] = generate_weekly_insights(weekly_stats)
+        summary_data["insights"]["time_slots"] = generate_time_slot_insights(time_slots)
+        summary_data["insights"]["continuity"] = generate_continuity_insights(viewing_continuity)
+        summary_data["insights"]["viewing_details"] = generate_viewing_report(viewing_details)
+        summary_data["insights"]["watch_counts"] = generate_watch_count_insights(watch_counts)
+        summary_data["insights"]["completion_rates"] = generate_completion_insights(completion_rates)
+        summary_data["insights"]["author_completion"] = generate_author_completion_insights(author_completion)
+        summary_data["insights"]["tag_analysis"] = generate_tag_analysis_insights(tag_analysis)
+        summary_data["insights"]["duration_analysis"] = generate_duration_analysis_insights(duration_analysis)
+        
+        print(f"成功收集 {target_year} 年的年度总结数据")
+        
+    except Exception as e:
+        print(f"收集年度总结数据时出错: {str(e)}")
+        raise
+    
+    return summary_data
+
+
+def analyze_monthly_stats(cursor, table_name: str) -> Dict[str, Any]:
+    """分析月度观看统计"""
+    cursor.execute(f"""
+        SELECT
+            strftime('%Y-%m', datetime(view_at + 28800, 'unixepoch')) as month,
+            COUNT(*) as view_count
+        FROM {table_name}
+        GROUP BY month
+        ORDER BY month
+    """)
+    monthly_stats = {row[0]: row[1] for row in cursor.fetchall()}
+    
+    cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+    total_videos = cursor.fetchone()[0]
+    
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT strftime('%Y-%m-%d', datetime(view_at + 28800, 'unixepoch')))
+        FROM {table_name}
+    """)
+    active_days = cursor.fetchone()[0] or 0
+    
+    avg_daily_videos = round(total_videos / active_days, 1) if active_days > 0 else 0
+    
+    return {
+        "monthly_stats": monthly_stats,
+        "total_videos": total_videos,
+        "active_days": active_days,
+        "avg_daily_videos": avg_daily_videos
+    }
+
+
+def generate_monthly_insights(monthly_data: Dict[str, Any]) -> Dict[str, str]:
+    """生成月度统计洞察"""
+    insights = {}
+    
+    monthly_stats = monthly_data.get("monthly_stats", {})
+    total_videos = monthly_data.get("total_videos", 0)
+    active_days = monthly_data.get("active_days", 0)
+    avg_daily_videos = monthly_data.get("avg_daily_videos", 0)
+    
+    if total_videos > 0 and active_days > 0:
+        insights['overall_activity'] = f"今年以来，你在B站观看了{total_videos}个视频，平均每天观看{avg_daily_videos}个视频"
+    
+    if monthly_stats:
+        max_month = max(monthly_stats.items(), key=lambda x: x[1])
+        min_month = min(monthly_stats.items(), key=lambda x: x[1])
+        
+        months = sorted(monthly_stats.keys())
+        month_trend = ""
+        if len(months) >= 2:
+            first_month_count = monthly_stats[months[0]]
+            last_month_count = monthly_stats[months[-1]]
+            if last_month_count > first_month_count * 1.2:
+                month_trend = "你在B站观看视频的热情正在逐月增长，看来你越来越喜欢B站了呢！"
+            elif last_month_count < first_month_count * 0.8:
+                month_trend = "最近你在B站的活跃度有所下降，可能是工作或学习变得更忙了吧。"
+            else:
+                month_trend = "你在B站的活跃度保持得很稳定，看来已经养成了良好的观看习惯。"
+        
+        insights['monthly_pattern'] = f"在{max_month[0]}月，你观看了{max_month[1]}个视频，是你最活跃的月份；而在{min_month[0]}月，观看量为{min_month[1]}个。{month_trend}"
+    
+    return insights
+
+
+def analyze_weekly_stats(cursor, table_name: str) -> Dict[str, Any]:
+    """分析周度观看统计"""
+    weekday_mapping = {'0': '周日', '1': '周一', '2': '周二', '3': '周三',
+                      '4': '周四', '5': '周五', '6': '周六'}
+    weekly_stats = {day: 0 for day in weekday_mapping.values()}
+    
+    cursor.execute(f"""
+        SELECT
+            strftime('%w', datetime(view_at + 28800, 'unixepoch')) as weekday,
+            COUNT(*) as view_count
+        FROM {table_name}
+        GROUP BY weekday
+        ORDER BY weekday
+    """)
+    for row in cursor.fetchall():
+        weekly_stats[weekday_mapping[row[0]]] = row[1]
+    
+    cursor.execute(f"""
+        SELECT
+            CASE
+                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (1,2,3) THEN '春季'
+                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (4,5,6) THEN '夏季'
+                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (7,8,9) THEN '秋季'
+                WHEN CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) IN (10,11,12) THEN '冬季'
+            END as season,
+            COUNT(*) as view_count,
+            AVG(CASE WHEN progress = -1 THEN duration ELSE progress END) as avg_duration
+        FROM {table_name}
+        WHERE CAST(strftime('%m', datetime(view_at + 28800, 'unixepoch')) AS INTEGER) BETWEEN 1 AND 12
+        GROUP BY season
+    """)
+    seasonal_patterns = {row[0]: {'view_count': row[1], 'avg_duration': row[2]} for row in cursor.fetchall()}
+    
+    cursor.execute(f"""
+        SELECT COUNT(DISTINCT strftime('%Y-%m-%d', datetime(view_at + 28800, 'unixepoch'))) as active_days
+        FROM {table_name}
+    """)
+    active_days = cursor.fetchone()[0] or 0
+    
+    return {
+        "weekly_stats": weekly_stats,
+        "seasonal_patterns": seasonal_patterns,
+        "active_days": active_days
+    }
+
+
+def generate_weekly_insights(weekly_data: Dict[str, Any]) -> Dict[str, str]:
+    """生成周度统计洞察"""
+    insights = {}
+    
+    weekly_stats = weekly_data.get("weekly_stats", {})
+    active_days = weekly_data.get("active_days", 0)
+    
+    if weekly_stats and active_days > 0:
+        max_weekday = max(weekly_stats.items(), key=lambda x: x[1])
+        min_weekday = min(weekly_stats.items(), key=lambda x: x[1])
+        
+        workday_avg = sum(weekly_stats[day] for day in ['周一', '周二', '周三', '周四', '周五']) / 5
+        weekend_avg = sum(weekly_stats[day] for day in ['周六', '周日']) / 2
+        
+        if weekend_avg > workday_avg * 1.5:
+            week_pattern = "你是一位周末党，倾向于在周末集中补番或观看视频。"
+        elif workday_avg > weekend_avg:
+            week_pattern = "工作日反而是你观看视频的主要时间，也许是通过B站来缓解工作压力？"
+        else:
+            week_pattern = "你的观看时间分布很均衡，不管是工作日还是周末都保持着适度的观看习惯。"
+        
+        insights['weekly_pattern'] = f"{week_pattern}其中{max_weekday[0]}是你最喜欢刷B站的日子，平均会看{round(max_weekday[1]/active_days*7, 1)}个视频；而{min_weekday[0]}的观看量最少。"
+    
+    return insights
+
+
+def analyze_time_slots(cursor, table_name: str) -> Dict[str, Any]:
+    """分析时段观看统计"""
+    cursor.execute(f"""
+        SELECT
+            strftime('%H', datetime(view_at + 28800, 'unixepoch')) as hour,
+            COUNT(*) as view_count
+        FROM {table_name}
+        GROUP BY hour
+        ORDER BY hour
+    """)
+    daily_time_slots = {f"{int(row[0])}时": row[1] for row in cursor.fetchall()}
+    
+    cursor.execute(f"""
+        SELECT
+            strftime('%H', datetime(view_at + 28800, 'unixepoch')) as hour,
+            COUNT(*) as view_count
+        FROM {table_name}
+        GROUP BY hour
+        ORDER BY view_count DESC
+        LIMIT 5
+    """)
+    peak_hours = [{
+        "hour": f"{int(row[0])}时",
+        "view_count": row[1]
+    } for row in cursor.fetchall()]
+    
+    time_investment = analyze_time_investment(cursor, table_name)
+    
+    cursor.execute(f"""
+        SELECT
+            date(datetime(view_at + 28800, 'unixepoch')) as view_date,
+            COUNT(*) as video_count
+        FROM {table_name}
+        GROUP BY view_date
+        ORDER BY video_count DESC
+        LIMIT 1
+    """)
+    max_daily_record = cursor.fetchone()
+    max_daily_record = {
+        'date': max_daily_record[0],
+        'video_count': max_daily_record[1]
+    } if max_daily_record else None
+    
+    return {
+        "daily_time_slots": daily_time_slots,
+        "peak_hours": peak_hours,
+        "time_investment": time_investment,
+        "max_daily_record": max_daily_record
+    }
+
+
+def generate_time_slot_insights(time_slot_data: Dict[str, Any]) -> Dict[str, str]:
+    """生成时段分析洞察"""
+    insights = {}
+    
+    daily_time_slots = time_slot_data.get("daily_time_slots", {})
+    peak_hours = time_slot_data.get("peak_hours", [])
+    max_daily_record = time_slot_data.get("max_daily_record")
+    
+    if daily_time_slots and peak_hours:
+        morning = sum(daily_time_slots.get(f"{i}时", 0) for i in range(5, 12))
+        afternoon = sum(daily_time_slots.get(f"{i}时", 0) for i in range(12, 18))
+        evening = sum(daily_time_slots.get(f"{i}时", 0) for i in range(18, 23))
+        night = sum(daily_time_slots.get(f"{i}时", 0) for i in range(23, 24)) + sum(daily_time_slots.get(f"{i}时", 0) for i in range(0, 5))
+        
+        time_slots = [
+            ("清晨和上午", morning),
+            ("下午", afternoon),
+            ("傍晚和晚上", evening),
+            ("深夜", night)
+        ]
+        primary_slot = max(time_slots, key=lambda x: x[1])
+        
+        if primary_slot[0] == "深夜":
+            time_advice = "熬夜看视频可能会影响健康，建议调整作息哦！"
+        else:
+            time_advice = "这个时间段的观看习惯很好，既不影响作息，也能享受视频带来的乐趣。"
+        
+        top_hour = peak_hours[0]["hour"] if peak_hours else "未知"
+        
+        insights['time_preference'] = f"你最喜欢在{primary_slot[0]}观看B站视频，特别是{top_hour}达到观看高峰。{time_advice}"
+    
+    if max_daily_record:
+        insights['daily_record'] = f"在{max_daily_record['date']}这一天，你创下了单日观看{max_daily_record['video_count']}个视频的记录！这可能是一个特别的日子，也许是在追番、学习或者在家放松的一天。"
+    
+    return insights
+
+
+def save_annual_summary_to_json(summary_data: Dict[str, Any], year: int) -> str:
+    """
+    将年度总结保存为 JSON 文件
+    
+    Args:
+        summary_data: 年度总结数据
+        year: 年份
+    
+    Returns:
+        str: 保存的文件路径
+    """
+    output_dir = get_output_path('annual_summary')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    filename = f"annual_summary_{year}.json"
+    filepath = os.path.join(output_dir, filename)
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(summary_data, f, ensure_ascii=False, indent=2, default=str)
+    
+    print(f"年度总结 JSON 已保存到: {filepath}")
+    return filepath
+
+
+@router.get("/annual-summary/json", summary="获取年度总结 JSON 数据")
+async def get_annual_summary_json(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用最新可用年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True"),
+    save_to_file: bool = Query(False, description="是否同时保存到文件，默认为False")
+):
+    """
+    获取年度总结的完整 JSON 数据，包含所有统计指标
+    
+    Args:
+        year: 要分析的年份，不传则使用最新可用年份
+        use_cache: 是否使用缓存
+        save_to_file: 是否同时保存到文件
+    
+    Returns:
+        dict: 包含完整年度总结数据的响应
+    """
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years
+    
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        
+        if use_cache:
+            from .title_pattern_discovery import pattern_cache
+            cached_response = pattern_cache.get_cached_patterns(table_name, 'annual_summary_json')
+            if cached_response:
+                print(f"从缓存获取 {target_year} 年的年度总结 JSON 数据")
+                return cached_response
+        
+        print(f"开始生成 {target_year} 年的年度总结 JSON 数据")
+        
+        summary_data = collect_annual_summary_data(cursor, table_name, target_year)
+        
+        response = {
+            "status": "success",
+            "data": summary_data,
+            "year": target_year,
+            "available_years": available_years
+        }
+        
+        if save_to_file:
+            filepath = save_annual_summary_to_json(summary_data, target_year)
+            response["saved_file"] = filepath
+        
+        from .title_pattern_discovery import pattern_cache
+        print(f"更新 {target_year} 年的年度总结 JSON 数据缓存")
+        pattern_cache.cache_patterns(table_name, 'annual_summary_json', response)
+        
+        return response
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn:
+            conn.close()
+
+
+@router.post("/annual-summary/export", summary="导出年度总结为 JSON 文件")
+async def export_annual_summary_json(
+    year: Optional[int] = Query(None, description="要分析的年份，不传则使用最新可用年份"),
+    use_cache: bool = Query(True, description="是否使用缓存，默认为True")
+):
+    """
+    导出年度总结为 JSON 文件并返回文件路径
+    
+    Args:
+        year: 要分析的年份，不传则使用最新可用年份
+        use_cache: 是否使用缓存
+    
+    Returns:
+        dict: 包含导出结果的响应
+    """
+    table_name, target_year, available_years = validate_year_and_get_table(year)
+    if table_name is None:
+        return available_years
+    
+    conn = get_db()
+    try:
+        cursor = conn.cursor()
+        
+        print(f"开始导出 {target_year} 年的年度总结 JSON 文件")
+        
+        summary_data = collect_annual_summary_data(cursor, table_name, target_year)
+        
+        filepath = save_annual_summary_to_json(summary_data, target_year)
+        
+        return {
+            "status": "success",
+            "message": f"年度总结已成功导出",
+            "year": target_year,
+            "available_years": available_years,
+            "file_path": filepath,
+            "file_name": os.path.basename(filepath)
+        }
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
