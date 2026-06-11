@@ -38,6 +38,13 @@ video_details_progress = {
 # 确保数据库目录存在
 os.makedirs(os.path.join("output", "database"), exist_ok=True)
 
+def _build_video_original_url(video: Dict[str, Any]) -> str:
+    """根据视频详情字段构建可打开的B站视频链接"""
+    bvid = (video.get("bvid") or "").strip()
+    if not bvid:
+        return ""
+    return f"https://www.bilibili.com/video/{bvid}"
+
 
 def init_db() -> None:
     """初始化数据库"""
@@ -1101,6 +1108,7 @@ async def get_video_info_from_db(bvid: str):
 
             # 转换为字典
             video_info_dict = dict(video_info)
+            video_info_dict["original_url"] = _build_video_original_url(video_info_dict)
 
             # 获取视频分P信息
             cursor.execute("""
@@ -1198,7 +1206,11 @@ async def search_videos(
             params.extend([per_page, offset])
 
             cursor.execute(query, params)
-            videos = [dict(video) for video in cursor.fetchall()]
+            videos = []
+            for video in cursor.fetchall():
+                video_dict = dict(video)
+                video_dict["original_url"] = _build_video_original_url(video_dict)
+                videos.append(video_dict)
 
             return {
                 "total": total,

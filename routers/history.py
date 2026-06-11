@@ -170,6 +170,46 @@ def _process_image_url(url: str, image_type: str, use_local: bool, use_sessdata:
         print(f"处理图片URL时出错: {str(e)}")
         return url
 
+def _build_original_url(record: dict) -> str:
+    """根据历史记录字段构建可打开的B站原始链接"""
+    uri = (record.get('uri') or '').strip()
+    if uri:
+        return uri
+
+    business = (record.get('business') or '').strip().lower()
+    bvid = (record.get('bvid') or '').strip()
+    page = record.get('page') or 1
+    oid = record.get('oid') or 0
+    epid = record.get('epid') or 0
+
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+
+    if business == 'archive' and bvid:
+        url = f"https://www.bilibili.com/video/{bvid}"
+        if page > 1:
+            url = f"{url}?p={page}"
+        return url
+
+    if business == 'pgc':
+        if epid:
+            return f"https://www.bilibili.com/bangumi/play/ep{epid}"
+        if oid:
+            return f"https://www.bilibili.com/bangumi/play/ss{oid}"
+
+    if business == 'live' and oid:
+        return f"https://live.bilibili.com/{oid}"
+
+    if business in {'article', 'article-list'} and oid:
+        return f"https://www.bilibili.com/read/cv{oid}"
+
+    if bvid:
+        return f"https://www.bilibili.com/video/{bvid}"
+
+    return ''
+
 def _process_record(record: dict, use_local: bool, use_sessdata: bool = True) -> dict:
     """处理单条记录，转换图片URL
 
@@ -207,6 +247,8 @@ def _process_record(record: dict, use_local: bool, use_sessdata: bool = True) ->
             record['covers'] = []
     else:
         record['covers'] = []
+
+    record['original_url'] = _build_original_url(record)
 
     return record
 
