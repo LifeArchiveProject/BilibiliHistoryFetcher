@@ -163,6 +163,12 @@ python main.py
 
 完整 API 文档访问：`http://localhost:8899/docs`
 
+## 通知配置
+
+- 设置页支持邮件配置和 Apprise 推送配置
+- `config/config.yaml` 的 `apprise.urls` 支持多个 URL，每行一个。
+- 计划任务出错和 SESSDATA 失效时会同时触发邮件和 Apprise 推送。
+
 ## MCP 局域网只读服务
 
 项目内置一个只读 MCP 服务，方便局域网内的其他 AI 客户端读取本地 B 站历史记录、统计分析、视频详情和任务状态。MCP 默认复用现有 FastAPI 服务，地址为：

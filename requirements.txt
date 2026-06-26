@@ -16,6 +16,8 @@ annotated-doc==0.0.4
     # via typer
 annotated-types==0.7.0
     # via pydantic
+apprise==1.11.0
+    # via bilibilihistoryfetcher
 anyio==4.9.0
     # via
     #   httpx

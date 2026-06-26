@@ -1498,6 +1498,7 @@ class SchedulerManager:
 async def send_error_notification(error_message):
     """发送错误通知邮件"""
     from scripts.send_log_email import send_email
+    from scripts.apprise_notify import send_apprise_notification
 
     # 直接使用send_email函数，它会自动从配置文件加载邮件设置
 
@@ -1515,3 +1516,10 @@ async def send_error_notification(error_message):
     except Exception as e:
         print(f"发送错误通知邮件失败: {e}")
         logger.error(f"发送错误通知邮件失败: {e}", exception=e)
+
+    try:
+        apprise_result = await send_apprise_notification(title=subject, body=body)
+        logger.info(f"任务错误 Apprise 通知结果: {apprise_result['message']}")
+    except Exception as e:
+        print(f"发送Apprise推送失败: {e}")
+        logger.error(f"发送Apprise推送失败: {e}", exception=e)

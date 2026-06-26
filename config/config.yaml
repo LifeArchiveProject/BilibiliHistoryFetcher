@@ -41,6 +41,11 @@ email:
   password: "xxxx"  # QQ邮箱授权码
   receiver: "xxxx@qq.com"
 
+# Apprise推送配置
+apprise:
+  enabled: false
+  urls:
+
 # 日志文件夹
 log_folder: "/www/wwwroot/python/logs"
 
