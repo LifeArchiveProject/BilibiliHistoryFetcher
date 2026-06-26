@@ -35,6 +35,7 @@ from routers import (
     image_downloader,
     scheduler,
     email_config,
+    apprise_config,
     comment,
     data_sync,
     favorite,
@@ -442,6 +443,7 @@ app.include_router(delete_history.router, prefix="/delete", tags=["删除历史�
 app.include_router(image_downloader.router, prefix="/images", tags=["图片下载管理"])
 app.include_router(scheduler.router, prefix="/scheduler", tags=["计划任务管理"])
 app.include_router(email_config.router, prefix="/config", tags=["配置管理"])
+app.include_router(apprise_config.router, prefix="/config", tags=["配置管理"])
 app.include_router(comment.router, prefix="/comment", tags=["评论管理"])
 app.include_router(data_sync.router, prefix="/data_sync", tags=["数据同步与完整性检查"])
 app.include_router(favorite.router, prefix="/favorite", tags=["收藏夹管理"])

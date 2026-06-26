@@ -557,6 +557,13 @@ async def check_and_notify():
             except Exception as e:
                 print(f"发送告警邮件失败: {e}")
 
+            try:
+                from scripts.apprise_notify import send_apprise_notification
+                apprise_result = await send_apprise_notification(title=subject, body=body)
+                logger.info(f"登录失效 Apprise 通知结果: {apprise_result['message']}")
+            except Exception as e:
+                print(f"发送Apprise推送失败: {e}")
+
             # 更新为失效状态
             try:
                 os.makedirs(os.path.dirname(state_path), exist_ok=True)
